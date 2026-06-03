@@ -10,13 +10,13 @@ Buat file CSV dengan format:
 
 ```csv
 NO_BPJS,TB_BB,LP,TD
-0000059117635,167/70,98,120/79
-0000159510161,150/67,86,110/70
+00000XXXXX635,167/70,98,120/79
+00001XXXXX161,150/67,86,110/70
 ```
 
 | Kolom | Keterangan | Contoh |
 |-------|-----------|--------|
-| NO_BPJS | Nomor BPJS peserta | 0000059117635 |
+| NO_BPJS | Nomor BPJS peserta | 00000XXXXX635 |
 | TB_BB | Tinggi badan / Berat badan | 167/70 |
 | LP | Lingkar perut | 98 |
 | TD | Tekanan darah (sistole/diastole) | 120/79 |
