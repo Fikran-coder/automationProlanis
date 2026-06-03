@@ -3,3 +3,4 @@ pcare-venv/
 __pycache__/
 *.pyc
 .kiro/
+.DS_Store
