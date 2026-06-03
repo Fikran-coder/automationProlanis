@@ -29,7 +29,7 @@ def fill_one_row(page, row, index):
     tinggi_badan, berat_badan = split_value(row["TB_BB"])
     lingkar_perut = str(row["LP"]).strip()
     sistole, diastole = split_value(row["TD"])
-    kegiatan = str(row.get("KEGIATAN", DEFAULT_KEGIATAN)).strip() or DEFAULT_KEGIATAN
+
 
     print(f"Processing row {index + 1}: {no_bpjs}")
 
@@ -61,7 +61,7 @@ def fill_one_row(page, row, index):
         page.get_by_text("Rawat Jalan").click()
 
     # Kegiatan dropdown
-    page.locator("#poli").select_option(kegiatan)
+    page.locator("#poli").select_option(DEFAULT_KEGIATAN)
 
     # Pemeriksaan Fisik
     page.locator("#tinggiBadan").fill(tinggi_badan)
@@ -86,7 +86,7 @@ def fill_one_row(page, row, index):
         "diastole": diastole,
         "respRate": DEFAULT_RESP_RATE,
         "heartRate": DEFAULT_HEART_RATE,
-        "kegiatan": kegiatan,
+        "kegiatan": DEFAULT_KEGIATAN,
     })
 
     if SUBMIT_FORM:
