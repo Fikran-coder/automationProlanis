@@ -8,6 +8,10 @@ FORM_URL = "https://pcarejkn.bpjs-kesehatan.go.id/eclaim/EntriDaftarDokkel"
 # 036 = Edukasi-Kelompok Prolanis
 DEFAULT_KEGIATAN = "037"
 
+# Constant vital signs for Prolanis group activities
+DEFAULT_RESP_RATE = "20"
+DEFAULT_HEART_RATE = "80"
+
 # Set False for first test so it fills the form but does NOT click Simpan.
 # Change to True when you are ready to submit.
 SUBMIT_FORM = False
@@ -18,14 +22,6 @@ def split_value(value):
     first = parts[0].strip()
     second = parts[1].strip() if len(parts) > 1 else ""
     return first, second
-
-
-def click_cari(page):
-    # Try button text first, then common fallback selectors.
-    try:
-        page.get_by_role("button", name="Cari").click(timeout=3000)
-    except PlaywrightTimeoutError:
-        page.locator('button:has-text("Cari"), input[value="Cari"], .btn:has-text("Cari")').first.click()
 
 
 def fill_one_row(page, row, index):
@@ -40,7 +36,20 @@ def fill_one_row(page, row, index):
     # Search BPJS number
     page.locator("#txtnokartu").fill(no_bpjs)
     page.locator("#btnCariPeserta").click()
-    page.wait_for_timeout(2500) 
+    page.wait_for_timeout(2500)
+
+    # Check if patient data was found and skrining is done
+    # If an alert/warning appears or Simpan is already disabled, skip this patient
+    alert = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
+    if alert.is_visible():
+        msg = alert.inner_text()
+        print(f"SKIPPED row {index + 1}: {no_bpjs} — {msg}")
+        # Dismiss alert if there's a button
+        dismiss = page.locator(".bootbox .btn-primary, .alert .close").first
+        if dismiss.is_visible():
+            dismiss.click()
+            page.wait_for_timeout(500)
+        return 'skipped'
 
     # Kunjungan Sehat
     page.locator('input[name="kunjSakitF"][value="false"]').check(force=True)
@@ -64,8 +73,8 @@ def fill_one_row(page, row, index):
     page.locator("#diastole").fill(diastole)
 
     # Constant values
-    page.locator("#respRate").fill("20")
-    page.locator("#heartRate").fill("80")
+    page.locator("#respRate").fill(DEFAULT_RESP_RATE)
+    page.locator("#heartRate").fill(DEFAULT_HEART_RATE)
 
     print("Filled data:")
     print({
@@ -75,8 +84,8 @@ def fill_one_row(page, row, index):
         "lingkarPerut": lingkar_perut,
         "sistole": sistole,
         "diastole": diastole,
-        "respRate": "20",
-        "heartRate": "80",
+        "respRate": DEFAULT_RESP_RATE,
+        "heartRate": DEFAULT_HEART_RATE,
         "kegiatan": kegiatan,
     })
 
@@ -104,10 +113,10 @@ if __name__ == "__main__":
             headless=False,
         )
 
-        page = browser.new_page()
+        page = browser.pages[0]
         page.goto(FORM_URL)
 
-        input("Login manually and set the date first, then press Enter to fill 1 test data...")
+        input("Login manually and set the date first, then press Enter to start...")
 
         results = []
         for index, row in df.iterrows():
