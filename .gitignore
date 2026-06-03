@@ -1,0 +1,5 @@
+browser_session/
+pcare-venv/
+__pycache__/
+*.pyc
+.kiro/
