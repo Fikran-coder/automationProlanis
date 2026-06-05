@@ -30,13 +30,13 @@ def fill_one_row(page, row, index):
     lingkar_perut = str(row["LP"]).strip()
     sistole, diastole = split_value(row["TD"])
 
-
     print(f"Processing row {index + 1}: {no_bpjs}")
 
     # Search BPJS number
     page.locator("#txtnokartu").fill(no_bpjs)
     page.locator("#btnCariPeserta").click()
-    page.wait_for_timeout(2500)
+    # Wait for search result: either patient name loads or an alert appears
+    page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=15000)
 
     # Check if patient data was found and skrining is done
     # If an alert/warning appears or Simpan is already disabled, skip this patient
@@ -49,16 +49,15 @@ def fill_one_row(page, row, index):
         if dismiss.is_visible():
             dismiss.click()
             page.wait_for_timeout(500)
+        # Reset form for next patient
+        page.goto(FORM_URL, wait_until="networkidle")
         return 'skipped'
 
     # Kunjungan Sehat
     page.locator('input[name="kunjSakitF"][value="false"]').check(force=True)
 
-    # Rawat Jalan. If this selector differs, inspect the radio input name/value.
-    try:
-        page.locator('input[name="rawatInap"][value="false"]').check(force=True, timeout=3000)
-    except PlaywrightTimeoutError:
-        page.get_by_text("Rawat Jalan").click()
+    # Rawat Jalan
+    page.locator('input[name="tkp"][value="10"]').check(force=True)
 
     # Kegiatan dropdown
     page.locator("#poli").select_option(DEFAULT_KEGIATAN)
@@ -94,11 +93,21 @@ def fill_one_row(page, row, index):
         page.wait_for_timeout(1000)
         if page.locator('#btnSimpanPendaftaran').is_disabled():
             print(f"SKIPPED row {index + 1}: {no_bpjs} — button is disabled.")
+            page.goto(FORM_URL, wait_until="networkidle")
             return 'skipped'
         page.locator("#btnSimpanPendaftaran").click()
-        page.wait_for_timeout(2500)
-        print(f"SUCCESS row {index + 1}: {no_bpjs} — submitted.")
-        return 'success'
+        # Wait for success banner/alert that confirms save and resets the form
+        try:
+            page.locator(".alert-success, .gritter-item-wrapper").first.wait_for(state="visible", timeout=10000)
+            print(f"SUCCESS row {index + 1}: {no_bpjs} — submitted.")
+            # Dismiss success notification if needed
+            dismiss = page.locator(".gritter-close").first
+            if dismiss.is_visible():
+                dismiss.click()
+            return 'success'
+        except PlaywrightTimeoutError:
+            print(f"WARNING row {index + 1}: {no_bpjs} — clicked submit but no confirmation banner detected.")
+            return 'success'
     else:
         print("TEST MODE: form was filled but not submitted. Set SUBMIT_FORM = True to click Simpan.")
         return 'test'
@@ -118,16 +127,24 @@ if __name__ == "__main__":
 
         input("Login manually and set the date first, then press Enter to start...")
 
-        results = []
+        log = {'success': [], 'skipped': [], 'error': [], 'test': []}
         for index, row in df.iterrows():
+            no_bpjs = str(row["NO_BPJS"]).strip()
             try:
                 result = fill_one_row(page, row, index)
             except Exception as e:
                 print(f"ERROR row {index + 1}: {e}")
                 result = 'error'
-            results.append(result)
+                # Reset page to clean state for next patient
+                page.goto(FORM_URL, wait_until="networkidle")
+            log[result].append(no_bpjs)
 
-        print(f"\n=== SUMMARY: success={results.count('success')}, skipped={results.count('skipped')}, errors={results.count('error')} ===")
+        print("\n=== SUMMARY ===")
+        print(f"SUCCESS ({len(log['success'])}): {', '.join(log['success']) or '-'}")
+        print(f"SKIPPED ({len(log['skipped'])}): {', '.join(log['skipped']) or '-'}")
+        print(f"ERROR   ({len(log['error'])}): {', '.join(log['error']) or '-'}")
+        if log['test']:
+            print(f"TEST    ({len(log['test'])}): {', '.join(log['test']) or '-'}")
 
         input("Review the browser result. Press Enter to close...")
         browser.close()
