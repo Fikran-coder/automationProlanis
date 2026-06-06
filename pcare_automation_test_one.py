@@ -1,7 +1,7 @@
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-CSV_FILE = "pcare_test_two_data.csv"
+CSV_FILE = "pcare_data.csv"
 FORM_URL = "https://pcarejkn.bpjs-kesehatan.go.id/eclaim/EntriDaftarDokkel"
 
 # 037 = Senam-Kelompok Prolanis
@@ -11,10 +11,6 @@ DEFAULT_KEGIATAN = "037"
 # Constant vital signs for Prolanis group activities
 DEFAULT_RESP_RATE = "20"
 DEFAULT_HEART_RATE = "80"
-
-# Set False for first test so it fills the form but does NOT click Simpan.
-# Change to True when you are ready to submit.
-SUBMIT_FORM = False
 
 
 def split_value(value):
@@ -116,6 +112,24 @@ def fill_one_row(page, row, index):
 if __name__ == "__main__":
     df = pd.read_csv(CSV_FILE, dtype=str).fillna("")
 
+    print("Pilih kegiatan:")
+    print("  1. Senam (037)")
+    print("  2. Edukasi (036)")
+    pilihan = input("Masukkan pilihan (1/2): ").strip()
+    if pilihan == "2":
+        DEFAULT_KEGIATAN = "036"
+        print("Kegiatan: Edukasi-Kelompok Prolanis")
+    else:
+        DEFAULT_KEGIATAN = "037"
+        print("Kegiatan: Senam-Kelompok Prolanis")
+
+    pilihan_submit = input("Submit data? (y/n): ").strip().lower()
+    SUBMIT_FORM = pilihan_submit == "y"
+    if SUBMIT_FORM:
+        print("Mode: SUBMIT (data akan disimpan)")
+    else:
+        print("Mode: TEST (form diisi tapi tidak disimpan)")
+
     with sync_playwright() as p:
         browser = p.chromium.launch_persistent_context(
             user_data_dir="browser_session",
@@ -125,7 +139,7 @@ if __name__ == "__main__":
         page = browser.pages[0]
         page.goto(FORM_URL)
 
-        input("Login manually and set the date first, then press Enter to start...")
+        input("Login dulu dan atur tanggal, lalu tekan Enter untuk mulai...")
 
         log = {'success': [], 'skipped': [], 'error': [], 'test': []}
         for index, row in df.iterrows():
@@ -148,5 +162,5 @@ if __name__ == "__main__":
         print(f"ERROR   ({len(log['error'])}): {', '.join(log['error']) or '-'}")
         print(f"TEST    ({len(log['test'])}): {', '.join(log['test']) or '-'}")
 
-        input("Review the browser result. Press Enter to close...")
+        input("Cek hasil di browser. Tekan Enter untuk menutup...")
         browser.close()
