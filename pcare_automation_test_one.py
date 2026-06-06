@@ -1,7 +1,7 @@
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-CSV_FILE = "pcare_test_one_data.csv"
+CSV_FILE = "pcare_test_two_data.csv"
 FORM_URL = "https://pcarejkn.bpjs-kesehatan.go.id/eclaim/EntriDaftarDokkel"
 
 # 037 = Senam-Kelompok Prolanis
@@ -138,13 +138,15 @@ if __name__ == "__main__":
                 # Reset page to clean state for next patient
                 page.goto(FORM_URL, wait_until="networkidle")
             log[result].append(no_bpjs)
+            # Delay between rows to avoid PCare rate limiting
+            page.wait_for_timeout(3000)
 
-        print("\n=== SUMMARY ===")
+        total = len(df)
+        print(f"\n=== SUMMARY ({total} total) ===")
         print(f"SUCCESS ({len(log['success'])}): {', '.join(log['success']) or '-'}")
         print(f"SKIPPED ({len(log['skipped'])}): {', '.join(log['skipped']) or '-'}")
         print(f"ERROR   ({len(log['error'])}): {', '.join(log['error']) or '-'}")
-        if log['test']:
-            print(f"TEST    ({len(log['test'])}): {', '.join(log['test']) or '-'}")
+        print(f"TEST    ({len(log['test'])}): {', '.join(log['test']) or '-'}")
 
         input("Review the browser result. Press Enter to close...")
         browser.close()
