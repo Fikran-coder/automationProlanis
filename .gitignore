@@ -5,6 +5,5 @@ __pycache__/
 .kiro/
 .DS_Store
 ~$*
-prolanis.doc
-pcare_test_one_data.csv
-pcare_test_two_data.csv
+*.csv
+*.doc
