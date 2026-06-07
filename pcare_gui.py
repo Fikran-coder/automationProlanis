@@ -269,12 +269,13 @@ class App(ctk.CTk):
 
         alert = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
         if alert.is_visible():
-            msg = alert.inner_text()
+            msg = alert.inner_text().strip()
             dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
             if dismiss.is_visible():
                 dismiss.click()
                 page.wait_for_timeout(500)
             page.goto(FORM_URL, wait_until="networkidle")
+            page.locator("#btnCariPeserta").wait_for(state="visible", timeout=10000)
             return "skipped", msg
 
         page.locator('input[name="kunjSakitF"][value="false"]').check(force=True)

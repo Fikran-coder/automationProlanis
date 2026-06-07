@@ -38,15 +38,16 @@ def fill_one_row(page, row, index):
     # If an alert/warning appears or Simpan is already disabled, skip this patient
     alert = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
     if alert.is_visible():
-        msg = alert.inner_text()
+        msg = alert.inner_text().strip()
         print(f"SKIPPED row {index + 1}: {no_bpjs} — {msg}")
         # Dismiss alert if there's a button
         dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
         if dismiss.is_visible():
             dismiss.click()
             page.wait_for_timeout(500)
-        # Reset form for next patient
+        # Reset form and wait for it to be ready
         page.goto(FORM_URL, wait_until="networkidle")
+        page.locator("#btnCariPeserta").wait_for(state="visible", timeout=10000)
         return 'skipped'
 
     # Kunjungan Sehat
