@@ -266,6 +266,8 @@ class App(ctk.CTk):
         page.locator("#txtnokartu").fill(no_bpjs)
         page.locator("#btnCariPeserta").click()
         page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=15000)
+        # Small buffer to allow delayed modals (e.g. non-aktif) to appear after patient data loads
+        page.wait_for_timeout(800)
 
         alert = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
         if alert.is_visible():

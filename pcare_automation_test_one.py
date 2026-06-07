@@ -33,6 +33,8 @@ def fill_one_row(page, row, index):
     page.locator("#btnCariPeserta").click()
     # Wait for search result: either patient name loads or an alert appears
     page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=15000)
+    # Small buffer to allow delayed modals (e.g. non-aktif) to appear after patient data loads
+    page.wait_for_timeout(800)
 
     # Check if patient data was found and skrining is done
     # If an alert/warning appears or Simpan is already disabled, skip this patient
