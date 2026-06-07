@@ -270,7 +270,7 @@ class App(ctk.CTk):
         alert = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
         if alert.is_visible():
             msg = alert.inner_text()
-            dismiss = page.locator(".bootbox .btn-primary, .alert .close").first
+            dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
             if dismiss.is_visible():
                 dismiss.click()
                 page.wait_for_timeout(500)

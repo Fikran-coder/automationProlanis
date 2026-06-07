@@ -41,7 +41,7 @@ def fill_one_row(page, row, index):
         msg = alert.inner_text()
         print(f"SKIPPED row {index + 1}: {no_bpjs} — {msg}")
         # Dismiss alert if there's a button
-        dismiss = page.locator(".bootbox .btn-primary, .alert .close").first
+        dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
         if dismiss.is_visible():
             dismiss.click()
             page.wait_for_timeout(500)
