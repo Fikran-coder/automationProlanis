@@ -200,6 +200,16 @@ class App(ctk.CTk):
                 self.after(0, self._show_login_dialog)
                 self._login_event.wait()
 
+                # Validate we're on the correct page and logged in
+                try:
+                    page.locator("#txtnokartu").wait_for(state="visible", timeout=5000)
+                    page.locator("#btnCariPeserta").wait_for(state="visible", timeout=5000)
+                except Exception:
+                    self._log("❌ Halaman tidak valid atau belum login.")
+                    self._log("   Pastikan sudah login dan berada di halaman Pendaftaran Pasien.")
+                    browser.close()
+                    return
+
                 self._log("🌸 Automation dimulai...")
 
                 for index, row in df.iterrows():
