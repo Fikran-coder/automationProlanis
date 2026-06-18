@@ -1,12 +1,17 @@
 # PCare Prolanis Automation
 
-Automation script untuk mengisi form pendaftaran kegiatan Prolanis (Dokter Kelompok) di PCare eClaim BPJS.
+Automation GUI untuk mengisi form di PCare eClaim BPJS. Mendukung 2 jenis automation:
 
-## Cara Pakai
+1. **Pendaftaran Kegiatan Prolanis** — mendaftarkan pasien ke kegiatan (Senam/Edukasi)
+2. **Pendaftaran Peserta Prolanis** — mendaftarkan pasien sebagai peserta Prolanis
+
+## Cara Pakai (GUI)
 
 ### 1. Siapkan file CSV
 
-Buat file CSV dengan format:
+Taruh file CSV di folder `file/`.
+
+**Format CSV — Pendaftaran Kegiatan:**
 
 ```csv
 NO_BPJS,TB_BB,LP,TD
@@ -21,33 +26,45 @@ NO_BPJS,TB_BB,LP,TD
 | LP | Lingkar perut | 98 |
 | TD | Tekanan darah (sistole/diastole) | 120/79 |
 
-### 2. Ubah nama file CSV di script
+**Format CSV — Pendaftaran Peserta:**
 
-Buka `pcare_automation_test_one.py`, ubah baris:
-
-```python
-CSV_FILE = "pcare_test_one_data.csv"
+```csv
+NO_BPJS,TELEPON,ALAMAT
+0001315950759,081514710526,KP. SUKAMANTRI
 ```
 
-Ganti dengan nama file CSV yang mau diproses.
+| Kolom | Keterangan | Contoh |
+|-------|-----------|--------|
+| NO_BPJS | Nomor BPJS peserta | 0001315950759 |
+| TELEPON | No. HP (jika kosong/invalid, pakai default) | 081514710526 |
+| ALAMAT | Alamat peserta | KP. SUKAMANTRI |
 
-### 3. Ubah kegiatan (jika perlu)
-
-```python
-DEFAULT_KEGIATAN = "037"  # 037 = Senam, 036 = Edukasi
-```
-
-### 4. Jalankan
+### 2. Jalankan GUI
 
 - **Mac**: `./run.sh`
 - **Windows**: double-click `run.bat`
 
-### 5. Submit
+### 3. Pilih pengaturan di GUI
 
-Setelah yakin form terisi benar, ubah:
+- **Automation** — pilih jenis automation
+- **Kegiatan** — pilih Senam (037) atau Edukasi (036) _(hanya untuk Pendaftaran Kegiatan)_
+- **Mode** — Test (isi form tanpa simpan) atau Submit (simpan data)
+- **Browse** — pilih file CSV
 
-```python
-SUBMIT_FORM = True
+### 4. Mulai
+
+1. Klik **Mulai Automation**
+2. Browser terbuka → **Login manual** ke PCare dan set tanggal
+3. Klik **OK** di dialog untuk memulai
+4. Pantau progress di log area
+5. Klik **Stop** kapan saja untuk menghentikan
+
+### 5. Log
+
+Setelah selesai, log otomatis disimpan di folder `logs/` dengan format:
+```
+logs/2026-06-18_191852_peserta.txt
+logs/2026-06-18_143000_kegiatan.txt
 ```
 
 ## Setup
@@ -58,6 +75,8 @@ SUBMIT_FORM = True
 ## Catatan
 
 - Script akan skip pasien yang alert/warning muncul setelah klik Cari
+- Script akan skip pasien yang sudah terdaftar Prolanis (ada label "- Prolanis")
 - Script akan skip jika tombol Simpan disabled
-- Hasil ditampilkan di terminal: SUCCESS / SKIPPED / ERROR
-- `respRate` dan `heartRate` diisi konstan (20 dan 80)
+- Pendaftaran Peserta: email konstan `upttamansari@gmail.com`, keterangan konstan `riwayat hipertensi`
+- Pendaftaran Peserta: telepon yang kosong/hanya nol/kurang dari 8 digit akan diganti `089526585949`
+- `respRate` dan `heartRate` diisi konstan (20 dan 80) untuk Pendaftaran Kegiatan
