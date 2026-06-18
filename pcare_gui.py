@@ -1,4 +1,6 @@
+import os
 import threading
+from datetime import datetime
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
@@ -6,6 +8,10 @@ import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from pcare_automation_test_one import FORM_URL, DEFAULT_RESP_RATE, DEFAULT_HEART_RATE, split_value
+from pcare_pendaftaran_peserta import (
+    FORM_URL as PESERTA_FORM_URL,
+    fill_peserta_row,
+)
 
 # ── Pastel Girly Theme ──────────────────────────────────────────────────────
 ctk.set_appearance_mode("Light")
@@ -33,6 +39,7 @@ FONT_SMALL = ("Helvetica", 11)
 FONT_BOLD  = ("Helvetica", 13, "bold")
 
 KEGIATAN_OPTIONS = {"🏃 Senam (037)": "037", "📚 Edukasi (036)": "036"}
+AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis"]
 
 
 class App(ctk.CTk):
@@ -43,10 +50,12 @@ class App(ctk.CTk):
         self.geometry("720x720")
         self.minsize(620, 640)
 
-        self.csv_path     = ctk.StringVar()
-        self.kegiatan_var = ctk.StringVar(value="🏃 Senam (037)")
-        self.mode_var     = ctk.StringVar(value="test")
-        self.counts       = {"success": 0, "skipped": 0, "error": 0, "test": 0}
+        self.csv_path          = ctk.StringVar()
+        self.automation_var    = ctk.StringVar(value=AUTOMATION_OPTIONS[0])
+        self.kegiatan_var      = ctk.StringVar(value="🏃 Senam (037)")
+        self.mode_var          = ctk.StringVar(value="test")
+        self.counts            = {"success": 0, "skipped": 0, "error": 0, "test": 0}
+        self._stop_flag        = False
 
         self._build_ui()
 
@@ -83,32 +92,60 @@ class App(ctk.CTk):
         card2.pack(fill="x", padx=24, pady=6)
         ctk.CTkLabel(card2, text="⚙️  Pengaturan", font=FONT_BOLD,
                      text_color=TEXT).pack(anchor="w", padx=16, pady=(12, 4))
-        settings_row = ctk.CTkFrame(card2, fg_color="transparent")
-        settings_row.pack(fill="x", padx=16, pady=(0, 12))
-        ctk.CTkLabel(settings_row, text="Kegiatan:", font=FONT_LABEL,
+
+        # Automation type row
+        type_row = ctk.CTkFrame(card2, fg_color="transparent")
+        type_row.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(type_row, text="Automation:", font=FONT_LABEL,
                      text_color=SUBTEXT).pack(side="left", padx=(0, 6))
-        ctk.CTkOptionMenu(settings_row, values=list(KEGIATAN_OPTIONS.keys()),
+        ctk.CTkOptionMenu(type_row, values=AUTOMATION_OPTIONS,
+                          variable=self.automation_var,
+                          fg_color=SOFT_PINK, button_color=ACCENT,
+                          button_hover_color=ACCENT_HOV, text_color=TEXT,
+                          dropdown_fg_color=CARD, dropdown_text_color=TEXT,
+                          font=FONT_SMALL, corner_radius=10, width=280,
+                          command=self._on_automation_change,
+                          ).pack(side="left")
+
+        # Kegiatan row (only for Pendaftaran Kegiatan)
+        self.kegiatan_row = ctk.CTkFrame(card2, fg_color="transparent")
+        self.kegiatan_row.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(self.kegiatan_row, text="Kegiatan:", font=FONT_LABEL,
+                     text_color=SUBTEXT).pack(side="left", padx=(0, 6))
+        ctk.CTkOptionMenu(self.kegiatan_row, values=list(KEGIATAN_OPTIONS.keys()),
                           variable=self.kegiatan_var,
                           fg_color=SOFT_PINK, button_color=ACCENT,
                           button_hover_color=ACCENT_HOV, text_color=TEXT,
                           dropdown_fg_color=CARD, dropdown_text_color=TEXT,
                           font=FONT_SMALL, corner_radius=10, width=180,
                           ).pack(side="left")
-        ctk.CTkLabel(settings_row, text="Mode:", font=FONT_LABEL,
-                     text_color=SUBTEXT).pack(side="left", padx=(24, 8))
+
+        # Mode row
+        self._mode_row = ctk.CTkFrame(card2, fg_color="transparent")
+        self._mode_row.pack(fill="x", padx=16, pady=(0, 12))
+        ctk.CTkLabel(self._mode_row, text="Mode:", font=FONT_LABEL,
+                     text_color=SUBTEXT).pack(side="left", padx=(0, 8))
         for label, value in [("🔍 Test", "test"), ("✅ Submit", "submit")]:
-            ctk.CTkRadioButton(settings_row, text=label, variable=self.mode_var,
+            ctk.CTkRadioButton(self._mode_row, text=label, variable=self.mode_var,
                                value=value, font=FONT_SMALL, text_color=TEXT,
                                fg_color=ACCENT, hover_color=ACCENT_HOV,
                                border_color=ACCENT).pack(side="left", padx=6)
 
-        # ── Start button ────────────────────────────────────────
+        # ── Start / Stop buttons ────────────────────────────────
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(fill="x", padx=24, pady=10)
         self.start_btn = ctk.CTkButton(
-            self, text="▶  Mulai Automation", state="disabled",
+            btn_row, text="▶  Mulai Automation", state="disabled",
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             font=("Helvetica", 14, "bold"), height=44, corner_radius=12,
             command=self._start)
-        self.start_btn.pack(padx=24, pady=10, fill="x")
+        self.start_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.stop_btn = ctk.CTkButton(
+            btn_row, text="⏹  Stop", state="disabled",
+            fg_color=RED, hover_color=RED_TXT, text_color="white",
+            font=("Helvetica", 14, "bold"), height=44, corner_radius=12,
+            width=120, command=self._stop)
+        self.stop_btn.pack(side="right")
 
         # ── Log area ────────────────────────────────────────────
         card3 = self._card(self)
@@ -146,6 +183,19 @@ class App(ctk.CTk):
             self.csv_path.set(path)
             self.start_btn.configure(state="normal")
 
+    def _stop(self):
+        self._stop_flag = True
+        self.stop_btn.configure(state="disabled")
+        self._log("🛑 Stop requested, akan berhenti setelah row saat ini...")
+
+    def _on_automation_change(self, choice):
+        if choice == AUTOMATION_OPTIONS[0]:
+            # Re-pack kegiatan row before the mode row
+            self.kegiatan_row.pack(fill="x", padx=16, pady=(0, 6),
+                                   before=self._mode_row)
+        else:
+            self.kegiatan_row.pack_forget()
+
     def _log(self, msg):
         self.after(0, self._append_log, msg)
 
@@ -162,7 +212,9 @@ class App(ctk.CTk):
             lbl.configure(text=f"{labels[key]}: {self.counts[key]}")
 
     def _start(self):
+        self._stop_flag = False
         self.start_btn.configure(state="disabled", text="⏳ Berjalan...")
+        self.stop_btn.configure(state="normal")
         self.counts = {"success": 0, "skipped": 0, "error": 0, "test": 0}
         self.after(0, self._update_summary)
         self.log_box.configure(state="normal")
@@ -174,8 +226,10 @@ class App(ctk.CTk):
 
     def _run_automation(self):
         csv_path    = self.csv_path.get()
-        kegiatan    = KEGIATAN_OPTIONS[self.kegiatan_var.get()]
         submit_form = self.mode_var.get() == "submit"
+        is_peserta  = self.automation_var.get() == AUTOMATION_OPTIONS[1]
+        form_url    = PESERTA_FORM_URL if is_peserta else FORM_URL
+        kegiatan    = None if is_peserta else KEGIATAN_OPTIONS[self.kegiatan_var.get()]
 
         try:
             df = pd.read_csv(csv_path, dtype=str).fillna("")
@@ -185,7 +239,9 @@ class App(ctk.CTk):
             return
 
         self._log(f"✨ Loaded {len(df)} data dari CSV")
-        self._log(f"Kegiatan : {self.kegiatan_var.get()}")
+        self._log(f"Automation: {self.automation_var.get()}")
+        if kegiatan:
+            self._log(f"Kegiatan : {self.kegiatan_var.get()}")
         self._log(f"Mode     : {'SUBMIT 🚀' if submit_form else 'TEST 🔍'}")
         self._log("─" * 50)
 
@@ -194,29 +250,38 @@ class App(ctk.CTk):
                 browser = p.chromium.launch_persistent_context(
                     user_data_dir="browser_session", headless=False)
                 page = browser.pages[0]
-                page.goto(FORM_URL)
+                page.goto(form_url)
 
                 self._login_event = threading.Event()
                 self.after(0, self._show_login_dialog)
                 self._login_event.wait()
 
-                # Validate we're on the correct page and logged in
+                # Validate page
                 try:
                     page.locator("#txtnokartu").wait_for(state="visible", timeout=5000)
                     page.locator("#btnCariPeserta").wait_for(state="visible", timeout=5000)
                 except Exception:
                     self._log("❌ Halaman tidak valid atau belum login.")
-                    self._log("   Pastikan sudah login dan berada di halaman Pendaftaran Pasien.")
                     browser.close()
                     return
 
                 self._log("🌸 Automation dimulai...")
 
+                # Save the date the user selected so we can restore after reload
+                if is_peserta:
+                    saved_date = page.locator("#txt_tglMulai").input_value()
+
                 for index, row in df.iterrows():
+                    if self._stop_flag:
+                        self._log("🛑 Automation dihentikan oleh user.")
+                        break
                     no_bpjs = str(row["NO_BPJS"]).strip()
                     self._log(f"[{index + 1}/{len(df)}] {no_bpjs}")
                     try:
-                        result, msg = self._fill_one_row(page, row, index, submit_form, kegiatan)
+                        if is_peserta:
+                            result, msg = fill_peserta_row(page, row, index, submit_form)
+                        else:
+                            result, msg = self._fill_one_row(page, row, index, submit_form, kegiatan)
                         self.counts[result] += 1
                         icons = {"success": "✅", "skipped": "⏭", "error": "❌", "test": "🔍"}
                         self._log(f"  {icons[result]} {result.upper()}{': ' + msg if msg else ''}")
@@ -225,7 +290,9 @@ class App(ctk.CTk):
                         self._log(f"  ❌ ERROR: {e}")
                         self.after(0, self._update_summary)
                         try:
-                            page.goto(FORM_URL, wait_until="networkidle")
+                            page.goto(form_url, wait_until="networkidle")
+                            if is_peserta and saved_date:
+                                page.locator("#txt_tglMulai").fill(saved_date)
                         except Exception:
                             self._log("  ⚠️ Browser tertutup, automation dihentikan.")
                             break
@@ -235,6 +302,9 @@ class App(ctk.CTk):
 
                 self._log("─" * 50)
                 self._log(f"🎀 Selesai! SUCCESS:{self.counts['success']} SKIPPED:{self.counts['skipped']} ERROR:{self.counts['error']} TEST:{self.counts['test']}")
+
+                # Save log to file
+                self._save_log()
 
                 self._review_event = threading.Event()
                 self.after(0, self._show_review_dialog)
@@ -246,6 +316,7 @@ class App(ctk.CTk):
             self._log(f"❌ Automation berhenti: {e}")
         finally:
             self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
+            self.after(0, lambda: self.stop_btn.configure(state="disabled"))
 
     def _show_login_dialog(self):
         messagebox.showinfo("Login Required 🌸",
@@ -256,6 +327,16 @@ class App(ctk.CTk):
         messagebox.showinfo("Selesai 🎀",
                             "Automation selesai!\nCek hasil di browser, lalu klik OK untuk menutup 💖")
         self._review_event.set()
+
+    def _save_log(self):
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        automation_name = "kegiatan" if self.automation_var.get() == AUTOMATION_OPTIONS[0] else "peserta"
+        filename = f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}_{automation_name}.txt"
+        log_content = self.log_box.get("1.0", "end").strip()
+        with open(os.path.join(log_dir, filename), "w") as f:
+            f.write(log_content)
+        self._log(f"📁 Log disimpan: logs/{filename}")
 
     def _fill_one_row(self, page, row, index, submit_form, kegiatan):
         no_bpjs = str(row["NO_BPJS"]).strip()
