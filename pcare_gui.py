@@ -12,6 +12,12 @@ from pcare_pendaftaran_peserta import (
     FORM_URL as PESERTA_FORM_URL,
     fill_peserta_row,
 )
+from komdat_automation import (
+    KOMDAT_LOGIN_URL,
+    navigate_to_table,
+    run_komdat,
+    parse_month,
+)
 
 # ── Pastel Girly Theme ──────────────────────────────────────────────────────
 ctk.set_appearance_mode("Light")
@@ -39,7 +45,7 @@ FONT_SMALL = ("Helvetica", 11)
 FONT_BOLD  = ("Helvetica", 13, "bold")
 
 KEGIATAN_OPTIONS = {"🏃 Senam (037)": "037", "📚 Edukasi (036)": "036"}
-AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis"]
+AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis", "🏥 Komdat Posyandu"]
 
 
 class App(ctk.CTk):
@@ -54,6 +60,7 @@ class App(ctk.CTk):
         self.automation_var    = ctk.StringVar(value=AUTOMATION_OPTIONS[0])
         self.kegiatan_var      = ctk.StringVar(value="🏃 Senam (037)")
         self.mode_var          = ctk.StringVar(value="test")
+        self.month_var         = ctk.StringVar(value="Januari")
         self.counts            = {"success": 0, "skipped": 0, "error": 0, "test": 0}
         self._stop_flag        = False
 
@@ -114,6 +121,22 @@ class App(ctk.CTk):
                      text_color=SUBTEXT).pack(side="left", padx=(0, 6))
         ctk.CTkOptionMenu(self.kegiatan_row, values=list(KEGIATAN_OPTIONS.keys()),
                           variable=self.kegiatan_var,
+                          fg_color=SOFT_PINK, button_color=ACCENT,
+                          button_hover_color=ACCENT_HOV, text_color=TEXT,
+                          dropdown_fg_color=CARD, dropdown_text_color=TEXT,
+                          font=FONT_SMALL, corner_radius=10, width=180,
+                          ).pack(side="left")
+
+        # Month row (only for Komdat Posyandu)
+        self.month_row = ctk.CTkFrame(card2, fg_color="transparent")
+        # Hidden initially — shown when Komdat is selected
+        ctk.CTkLabel(self.month_row, text="Bulan:", font=FONT_LABEL,
+                     text_color=SUBTEXT).pack(side="left", padx=(0, 6))
+        ctk.CTkOptionMenu(self.month_row,
+                          values=["Januari", "Februari", "Maret", "April",
+                                  "Mei", "Juni", "Juli", "Agustus",
+                                  "September", "Oktober", "November", "Desember"],
+                          variable=self.month_var,
                           fg_color=SOFT_PINK, button_color=ACCENT,
                           button_hover_color=ACCENT_HOV, text_color=TEXT,
                           dropdown_fg_color=CARD, dropdown_text_color=TEXT,
@@ -190,11 +213,23 @@ class App(ctk.CTk):
 
     def _on_automation_change(self, choice):
         if choice == AUTOMATION_OPTIONS[0]:
-            # Re-pack kegiatan row before the mode row
+            # Pendaftaran Kegiatan: show kegiatan, hide month
             self.kegiatan_row.pack(fill="x", padx=16, pady=(0, 6),
                                    before=self._mode_row)
-        else:
+            self.month_row.pack_forget()
+            self.start_btn.configure(state="normal" if self.csv_path.get() else "disabled")
+        elif choice == AUTOMATION_OPTIONS[2]:
+            # Komdat Posyandu: show month, hide kegiatan
             self.kegiatan_row.pack_forget()
+            self.month_row.pack(fill="x", padx=16, pady=(0, 6),
+                                before=self._mode_row)
+            # Komdat doesn't need CSV, always enable start
+            self.start_btn.configure(state="normal")
+        else:
+            # Pendaftaran Peserta: hide both
+            self.kegiatan_row.pack_forget()
+            self.month_row.pack_forget()
+            self.start_btn.configure(state="normal" if self.csv_path.get() else "disabled")
 
     def _log(self, msg):
         self.after(0, self._append_log, msg)
@@ -225,6 +260,12 @@ class App(ctk.CTk):
     # ── Automation thread ────────────────────────────────────────────────────
 
     def _run_automation(self):
+        is_komdat = self.automation_var.get() == AUTOMATION_OPTIONS[2]
+
+        if is_komdat:
+            self._run_komdat_automation()
+            return
+
         csv_path    = self.csv_path.get()
         submit_form = self.mode_var.get() == "submit"
         is_peserta  = self.automation_var.get() == AUTOMATION_OPTIONS[1]
@@ -318,9 +359,68 @@ class App(ctk.CTk):
             self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
             self.after(0, lambda: self.stop_btn.configure(state="disabled"))
 
+    def _run_komdat_automation(self):
+        month_str = self.month_var.get()
+        submit_form = self.mode_var.get() == "submit"
+        try:
+            month_num = parse_month(month_str)
+        except ValueError as e:
+            self._log(f"❌ {e}")
+            self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
+            return
+
+        self._log(f"🏥 Komdat Posyandu — Bulan: {month_str} ({month_num})")
+        self._log(f"Mode     : {'SUBMIT 🚀' if submit_form else 'TEST 🔍'}")
+        self._log("─" * 50)
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch_persistent_context(
+                    user_data_dir="browser_session_komdat", headless=False)
+                page = browser.pages[0]
+                page.goto(KOMDAT_LOGIN_URL)
+
+                self._login_event = threading.Event()
+                self.after(0, self._show_komdat_login_dialog)
+                self._login_event.wait()
+
+                # Click Edit button on the Kegiatan Posyandu page
+                self._log("🔄 Klik Edit...")
+                navigate_to_table(page)
+                self._log("✅ Table loaded")
+
+                # Run the automation
+                processed, skipped = run_komdat(
+                    page, month_num, submit_form, self._log, lambda: self._stop_flag)
+
+                self.counts["success"] = processed
+                self.counts["skipped"] = skipped
+                self.after(0, self._update_summary)
+
+                self._log("─" * 50)
+                self._log(f"🎀 Selesai! Processed: {processed}, Skipped: {skipped}")
+                self._save_log()
+
+                self._review_event = threading.Event()
+                self.after(0, self._show_review_dialog)
+                self._review_event.wait()
+
+                browser.close()
+
+        except Exception as e:
+            self._log(f"❌ Automation berhenti: {e}")
+        finally:
+            self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
+            self.after(0, lambda: self.stop_btn.configure(state="disabled"))
+
     def _show_login_dialog(self):
         messagebox.showinfo("Login Required 🌸",
                             "Login dulu dan atur tanggal,\nlalu klik OK untuk mulai ✨")
+        self._login_event.set()
+
+    def _show_komdat_login_dialog(self):
+        messagebox.showinfo("Login Required 🏥",
+                            "Login dulu, lalu buka halaman\n'Kegiatan Posyandu'.\n\nKlik OK setelah sudah di halaman tersebut ✨")
         self._login_event.set()
 
     def _show_review_dialog(self):
@@ -331,7 +431,8 @@ class App(ctk.CTk):
     def _save_log(self):
         log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
         os.makedirs(log_dir, exist_ok=True)
-        automation_name = "kegiatan" if self.automation_var.get() == AUTOMATION_OPTIONS[0] else "peserta"
+        automation_name = "kegiatan" if self.automation_var.get() == AUTOMATION_OPTIONS[0] else \
+                         "komdat" if self.automation_var.get() == AUTOMATION_OPTIONS[2] else "peserta"
         filename = f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}_{automation_name}.txt"
         log_content = self.log_box.get("1.0", "end").strip()
         with open(os.path.join(log_dir, filename), "w") as f:

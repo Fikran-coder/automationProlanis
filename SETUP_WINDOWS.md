@@ -54,17 +54,7 @@ python pcare_gui.py
 
 Atau double-click `run.bat`.
 
-## Step 7: Cara Pakai
-
-1. Pilih **Automation** (Kegiatan atau Peserta)
-2. Pilih **Kegiatan** (Senam/Edukasi) — hanya untuk Pendaftaran Kegiatan
-3. Pilih **Mode** (Test atau Submit)
-4. Klik **Browse** dan pilih file CSV dari folder `file/`
-5. Klik **Mulai Automation**
-6. Browser Chromium terbuka → **Login manual** ke PCare dan set tanggal
-7. Klik **OK** untuk memulai
-8. Pantau progress di log area
-9. Klik **Stop** kapan saja untuk menghentikan
+Untuk cara pakai lengkap, lihat `README.md`.
 
 ## Catatan
 
