@@ -394,8 +394,18 @@ class App(ctk.CTk):
                 self._log("✅ Table loaded")
 
                 # Run the automation
+                def _on_progress(proc, skip, err):
+                    if submit_form:
+                        self.counts["success"] = proc
+                    else:
+                        self.counts["test"] = proc
+                    self.counts["skipped"] = skip
+                    self.counts["error"] = err
+                    self.after(0, self._update_summary)
+
                 processed, skipped, errors = run_komdat(
-                    page, month_num, submit_form, self._log, lambda: self._stop_flag)
+                    page, month_num, submit_form, self._log, lambda: self._stop_flag,
+                    on_progress=_on_progress)
 
                 if submit_form:
                     self.counts["success"] = processed

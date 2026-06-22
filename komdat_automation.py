@@ -108,15 +108,13 @@ def fill_posyandu_modal(page: Page, submit_form: bool):
         pass
 
 
-def run_komdat(page: Page, month_num: int, submit_form: bool, log_fn, stop_check):
+def run_komdat(page: Page, month_num: int, submit_form: bool, log_fn, stop_check, on_progress=None):
     """
     Main automation loop: iterate all posyandu rows for the given month.
     - Skip green buttons (btn-success)
     - Click grey buttons (btn-default) and fill the modal
+    - on_progress(processed, skipped, errors) called after each row
     """
-    # Find all UPDATE buttons for the target month (column index based on month)
-    # The buttons have class like btn-bulan{posyandu_id}{month_num}
-    # and contain "bulan={month_num}" in their delete-url
     rows = page.locator("table.table-bordered tbody tr")
     row_count = rows.count()
     log_fn(f"📊 Found {row_count} posyandu rows")
@@ -131,25 +129,25 @@ def run_komdat(page: Page, month_num: int, submit_form: bool, log_fn, stop_check
             break
 
         row = rows.nth(i)
-        # Get posyandu name from 3rd td
         name_el = row.locator("td").nth(2)
         posyandu_name = name_el.inner_text().strip() if name_el.is_visible() else f"Row {i+1}"
 
-        # Find the UPDATE button for this month by matching bulan= in the URL
         btn = row.locator(f"a.modalButton[delete-url*='bulan={month_num}']")
         if btn.count() == 0:
             log_fn(f"  [{i+1}] {posyandu_name} — bulan {month_num} tidak tersedia, skip")
             skipped += 1
+            if on_progress:
+                on_progress(processed, skipped, errors)
             continue
 
-        # Check if already done (green = btn-success)
         btn_class = btn.first.get_attribute("class") or ""
         if "btn-success" in btn_class:
             log_fn(f"  [{i+1}] {posyandu_name} — ✅ already done, skip")
             skipped += 1
+            if on_progress:
+                on_progress(processed, skipped, errors)
             continue
 
-        # Click the grey button to open modal
         log_fn(f"  [{i+1}] {posyandu_name} — filling...")
         btn.first.click()
         page.wait_for_timeout(2000)
@@ -168,6 +166,8 @@ def run_komdat(page: Page, month_num: int, submit_form: bool, log_fn, stop_check
             except Exception:
                 pass
 
+        if on_progress:
+            on_progress(processed, skipped, errors)
         page.wait_for_timeout(1000)
 
     return processed, skipped, errors
