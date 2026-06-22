@@ -81,6 +81,7 @@ class App(ctk.CTk):
         # ── CSV picker ──────────────────────────────────────────
         card1 = self._card(self)
         card1.pack(fill="x", padx=24, pady=(18, 6))
+        self.csv_card = card1
         ctk.CTkLabel(card1, text="📂  File CSV", font=FONT_BOLD,
                      text_color=TEXT).pack(anchor="w", padx=16, pady=(12, 4))
         row = ctk.CTkFrame(card1, fg_color="transparent")
@@ -97,6 +98,7 @@ class App(ctk.CTk):
         # ── Settings card ───────────────────────────────────────
         card2 = self._card(self)
         card2.pack(fill="x", padx=24, pady=6)
+        self.settings_card = card2
         ctk.CTkLabel(card2, text="⚙️  Pengaturan", font=FONT_BOLD,
                      text_color=TEXT).pack(anchor="w", padx=16, pady=(12, 4))
 
@@ -213,20 +215,22 @@ class App(ctk.CTk):
 
     def _on_automation_change(self, choice):
         if choice == AUTOMATION_OPTIONS[0]:
-            # Pendaftaran Kegiatan: show kegiatan, hide month
+            # Pendaftaran Kegiatan: show kegiatan, hide month, show CSV
+            self.csv_card.pack(fill="x", padx=24, pady=(18, 6), before=self.settings_card)
             self.kegiatan_row.pack(fill="x", padx=16, pady=(0, 6),
                                    before=self._mode_row)
             self.month_row.pack_forget()
             self.start_btn.configure(state="normal" if self.csv_path.get() else "disabled")
         elif choice == AUTOMATION_OPTIONS[2]:
-            # Komdat Posyandu: show month, hide kegiatan
+            # Komdat Posyandu: show month, hide kegiatan, hide CSV
+            self.csv_card.pack_forget()
             self.kegiatan_row.pack_forget()
             self.month_row.pack(fill="x", padx=16, pady=(0, 6),
                                 before=self._mode_row)
-            # Komdat doesn't need CSV, always enable start
             self.start_btn.configure(state="normal")
         else:
-            # Pendaftaran Peserta: hide both
+            # Pendaftaran Peserta: hide kegiatan & month, show CSV
+            self.csv_card.pack(fill="x", padx=24, pady=(18, 6), before=self.settings_card)
             self.kegiatan_row.pack_forget()
             self.month_row.pack_forget()
             self.start_btn.configure(state="normal" if self.csv_path.get() else "disabled")
@@ -390,15 +394,19 @@ class App(ctk.CTk):
                 self._log("✅ Table loaded")
 
                 # Run the automation
-                processed, skipped = run_komdat(
+                processed, skipped, errors = run_komdat(
                     page, month_num, submit_form, self._log, lambda: self._stop_flag)
 
-                self.counts["success"] = processed
+                if submit_form:
+                    self.counts["success"] = processed
+                else:
+                    self.counts["test"] = processed
                 self.counts["skipped"] = skipped
+                self.counts["error"] = errors
                 self.after(0, self._update_summary)
 
                 self._log("─" * 50)
-                self._log(f"🎀 Selesai! Processed: {processed}, Skipped: {skipped}")
+                self._log(f"🎀 Selesai! Processed: {processed}, Skipped: {skipped}, Error: {errors}")
                 self._save_log()
 
                 self._review_event = threading.Event()

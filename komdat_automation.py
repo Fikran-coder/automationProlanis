@@ -123,6 +123,7 @@ def run_komdat(page: Page, month_num: int, submit_form: bool, log_fn, stop_check
 
     processed = 0
     skipped = 0
+    errors = 0
 
     for i in range(row_count):
         if stop_check():
@@ -158,6 +159,7 @@ def run_komdat(page: Page, month_num: int, submit_form: bool, log_fn, stop_check
             processed += 1
             log_fn(f"  [{i+1}] {posyandu_name} — ✅ done")
         except Exception as e:
+            errors += 1
             log_fn(f"  [{i+1}] {posyandu_name} — ❌ error: {e}")
             # Try to close modal
             try:
@@ -168,4 +170,4 @@ def run_komdat(page: Page, month_num: int, submit_form: bool, log_fn, stop_check
 
         page.wait_for_timeout(1000)
 
-    return processed, skipped
+    return processed, skipped, errors
