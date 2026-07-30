@@ -6,6 +6,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import Stealth
 
 from pcare_automation_test_one import FORM_URL, DEFAULT_RESP_RATE, DEFAULT_HEART_RATE, split_value
 from pcare_pendaftaran_peserta import (
@@ -291,9 +292,11 @@ class App(ctk.CTk):
         self._log("─" * 50)
 
         try:
-            with sync_playwright() as p:
+            with Stealth().use_sync(sync_playwright()) as p:
                 browser = p.chromium.launch_persistent_context(
-                    user_data_dir="browser_session", headless=False)
+                    user_data_dir="browser_session", headless=False,
+                    channel="chrome",
+                    args=["--disable-blink-features=AutomationControlled"])
                 page = browser.pages[0]
                 page.goto(form_url)
 
@@ -324,7 +327,7 @@ class App(ctk.CTk):
                     self._log(f"[{index + 1}/{len(df)}] {no_bpjs}")
                     try:
                         if is_peserta:
-                            result, msg = fill_peserta_row(page, row, index, submit_form)
+                            result, msg = fill_peserta_row(page, row, index, submit_form, tanggal=saved_date)
                         else:
                             result, msg = self._fill_one_row(page, row, index, submit_form, kegiatan)
                         self.counts[result] += 1
@@ -335,12 +338,30 @@ class App(ctk.CTk):
                         self._log(f"  ❌ ERROR: {e}")
                         self.after(0, self._update_summary)
                         try:
-                            page.goto(form_url, wait_until="networkidle")
+                            page.goto(form_url, wait_until="domcontentloaded")
+                            page.wait_for_timeout(3000)
+                            page.locator("#txtnokartu").wait_for(state="visible", timeout=15000)
                             if is_peserta and saved_date:
-                                page.locator("#txt_tglMulai").fill(saved_date)
+                                page.evaluate("""(date) => {
+                                    const el = document.querySelector('#txt_tglMulai');
+                                    el.value = date;
+                                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                                }""", saved_date)
                         except Exception:
-                            self._log("  ⚠️ Browser tertutup, automation dihentikan.")
-                            break
+                            self._log("  ⚠️ Gagal reload halaman, coba sekali lagi...")
+                            try:
+                                page.wait_for_timeout(5000)
+                                page.goto(form_url, wait_until="domcontentloaded")
+                                page.locator("#txtnokartu").wait_for(state="visible", timeout=20000)
+                                if is_peserta and saved_date:
+                                    page.evaluate("""(date) => {
+                                        const el = document.querySelector('#txt_tglMulai');
+                                        el.value = date;
+                                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                                    }""", saved_date)
+                            except Exception:
+                                self._log("  ⚠️ Browser tertutup, automation dihentikan.")
+                                break
 
                     self.after(0, self._update_summary)
                     page.wait_for_timeout(3000)
@@ -378,9 +399,11 @@ class App(ctk.CTk):
         self._log("─" * 50)
 
         try:
-            with sync_playwright() as p:
+            with Stealth().use_sync(sync_playwright()) as p:
                 browser = p.chromium.launch_persistent_context(
-                    user_data_dir="browser_session_komdat", headless=False)
+                    user_data_dir="browser_session_komdat", headless=False,
+                    channel="chrome",
+                    args=["--disable-blink-features=AutomationControlled"])
                 page = browser.pages[0]
                 page.goto(KOMDAT_LOGIN_URL)
 
@@ -463,9 +486,26 @@ class App(ctk.CTk):
         lingkar_perut = str(row["LP"]).strip()
         sistole, diastole = split_value(row["TD"])
 
+        # Wait for Turnstile token (retry up to 3 times)
+        from pcare_pendaftaran_peserta import _wait_turnstile
+        turnstile_ready = False
+        for attempt in range(3):
+            if _wait_turnstile(page):
+                turnstile_ready = True
+                break
+            page.wait_for_timeout(5000)
+        if not turnstile_ready:
+            return "skipped", "Turnstile token belum siap"
+
         page.locator("#txtnokartu").fill(no_bpjs)
         page.locator("#btnCariPeserta").click()
-        page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=15000)
+
+        try:
+            page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=20000)
+        except PlaywrightTimeoutError:
+            page.locator("#txtnokartu").fill("")
+            return "skipped", "tidak ada respons (kemungkinan Turnstile expired)"
+
         # Small buffer to allow delayed modals (e.g. non-aktif) to appear after patient data loads
         page.wait_for_timeout(800)
 
@@ -476,7 +516,7 @@ class App(ctk.CTk):
             if dismiss.is_visible():
                 dismiss.click()
                 page.wait_for_timeout(500)
-            page.goto(FORM_URL, wait_until="networkidle")
+            page.goto(FORM_URL, wait_until="domcontentloaded")
             page.locator("#btnCariPeserta").wait_for(state="visible", timeout=10000)
             return "skipped", msg
 
@@ -494,7 +534,7 @@ class App(ctk.CTk):
         if submit_form:
             page.wait_for_timeout(1000)
             if page.locator("#btnSimpanPendaftaran").is_disabled():
-                page.goto(FORM_URL, wait_until="networkidle")
+                page.goto(FORM_URL, wait_until="domcontentloaded")
                 return "skipped", "button disabled"
             page.locator("#btnSimpanPendaftaran").click()
             try:

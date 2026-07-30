@@ -9,17 +9,86 @@ DEFAULT_PROGRAM = "02"  # 02 = Hipertensi
 DEFAULT_TENAGA_MEDIS = "NETTY SUSILAWATI"
 DEFAULT_TELEPON = "089526585949"
 
+TURNSTILE_SELECTOR = "#cf-chl-widget-wqahr_response"
 
-def fill_peserta_row(page, row, index, submit_form):
+
+def _wait_turnstile(page, timeout=15000):
+    """Wait until Cloudflare Turnstile token is populated."""
+    try:
+        page.wait_for_function(
+            """() => {
+                const el = document.querySelector('[name="cf-turnstile-response"]');
+                return el && el.value && el.value.length > 20;
+            }""",
+            timeout=timeout,
+        )
+        return True
+    except PlaywrightTimeoutError:
+        return False
+
+
+def fill_peserta_row(page, row, index, submit_form, tanggal=None):
     no_bpjs = str(row["NO_BPJS"]).strip()
     telepon = str(row["TELEPON"]).strip()
     alamat = str(row["ALAMAT"]).strip()
 
+    # Wait for Turnstile token before searching (retry up to 3 times)
+    turnstile_ready = False
+    for attempt in range(3):
+        if _wait_turnstile(page):
+            turnstile_ready = True
+            break
+        page.wait_for_timeout(5000)  # wait 5s for token to refresh
+    if not turnstile_ready:
+        return "skipped", "Turnstile token belum siap"
+
     # Search patient
     page.locator("#txtnokartu").fill(no_bpjs)
     page.locator("#btnCariPeserta").click()
-    page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=15000)
+
+    # Wait for result — but handle silent failure (Turnstile rejection)
+    try:
+        page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=20000)
+    except PlaywrightTimeoutError:
+        # Check if page redirected away
+        if "EntriPesertaProlanis" not in page.url:
+            page.goto(FORM_URL, wait_until="domcontentloaded")
+            page.locator("#txtnokartu").wait_for(state="visible", timeout=15000)
+            if tanggal:
+                page.evaluate("""(date) => {
+                    const el = document.querySelector('#txt_tglMulai');
+                    el.value = date;
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""", tanggal)
+        else:
+            page.locator("#txtnokartu").fill("")
+        return "skipped", "tidak ada respons (kemungkinan Turnstile expired)"
+
     page.wait_for_timeout(800)
+
+    # Check if page got redirected after search
+    if "EntriPesertaProlanis" not in page.url:
+        page.goto(FORM_URL, wait_until="domcontentloaded")
+        page.locator("#txtnokartu").wait_for(state="visible", timeout=15000)
+        if tanggal:
+            page.evaluate("""(date) => {
+                const el = document.querySelector('#txt_tglMulai');
+                el.value = date;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }""", tanggal)
+        return "skipped", "halaman redirect, kembali ke form"
+
+    # Restore tanggal after search (form resets due to Cloudflare)
+    if tanggal:
+        # Use JS to set value directly and avoid datepicker popup
+        page.evaluate("""(date) => {
+            const el = document.querySelector('#txt_tglMulai');
+            el.value = date;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }""", tanggal)
+        # # Dismiss datepicker if it appeared
+        # page.locator("body").click(position={"x": 0, "y": 0})
+        # page.wait_for_timeout(300)
 
     # Check alerts
     alert = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
