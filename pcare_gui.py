@@ -19,6 +19,11 @@ from komdat_automation import (
     run_komdat,
     parse_month,
 )
+from epuskesmas_automation import (
+    EPUSKESMAS_LOGIN_URL,
+    EPUSKESMAS_PASIEN_URL,
+    run_update_alamat,
+)
 
 # ── Pastel Girly Theme ──────────────────────────────────────────────────────
 ctk.set_appearance_mode("Light")
@@ -46,7 +51,7 @@ FONT_SMALL = ("Helvetica", 11)
 FONT_BOLD  = ("Helvetica", 13, "bold")
 
 KEGIATAN_OPTIONS = {"🏃 Senam (037)": "037", "📚 Edukasi (036)": "036"}
-AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis", "🏥 Komdat Posyandu"]
+AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis", "🏥 Komdat Posyandu", "📍 Update Alamat CSV"]
 
 
 def _dismiss_load_modals(page, after_reload=True):
@@ -288,6 +293,12 @@ class App(ctk.CTk):
             self.month_row.pack(fill="x", padx=16, pady=(0, 6),
                                 before=self._mode_row)
             self.start_btn.configure(state="normal")
+        elif choice == AUTOMATION_OPTIONS[3]:
+            # Update Alamat CSV: hide kegiatan, hide month, show CSV browse
+            self.csv_card.pack(fill="x", padx=24, pady=(18, 6), before=self.settings_card)
+            self.kegiatan_row.pack_forget()
+            self.month_row.pack_forget()
+            self.start_btn.configure(state="normal" if self.csv_path.get() else "disabled")
         else:
             # Pendaftaran Peserta: hide kegiatan & month, show CSV
             self.csv_card.pack(fill="x", padx=24, pady=(18, 6), before=self.settings_card)
@@ -325,9 +336,14 @@ class App(ctk.CTk):
 
     def _run_automation(self):
         is_komdat = self.automation_var.get() == AUTOMATION_OPTIONS[2]
+        is_update_alamat = self.automation_var.get() == AUTOMATION_OPTIONS[3]
 
         if is_komdat:
             self._run_komdat_automation()
+            return
+
+        if is_update_alamat:
+            self._run_update_alamat_automation()
             return
 
         csv_path    = self.csv_path.get()
@@ -513,6 +529,78 @@ class App(ctk.CTk):
             self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
             self.after(0, lambda: self.stop_btn.configure(state="disabled"))
 
+    def _run_update_alamat_automation(self):
+        import os
+
+        csv_path = self.csv_path.get()
+        submit_form = self.mode_var.get() == "submit"
+
+        if not csv_path or not os.path.isfile(csv_path):
+            self._log("❌ File CSV tidak valid")
+            self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
+            return
+
+        self._log(f"📍 Update Alamat CSV")
+        self._log(f"File: {os.path.basename(csv_path)}")
+        self._log(f"Mode     : {'SUBMIT 🚀 (update CSV)' if submit_form else 'TEST 🔍 (hanya cari)'}")
+        self._log("─" * 50)
+
+        try:
+            with Stealth().use_sync(sync_playwright()) as p:
+                browser = p.chromium.launch_persistent_context(
+                    user_data_dir="browser_session_epuskesmas", headless=False,
+                    channel="chrome",
+                    args=["--disable-blink-features=AutomationControlled"])
+                page = browser.pages[0]
+                page.goto(EPUSKESMAS_LOGIN_URL)
+
+                self._login_event = threading.Event()
+                self.after(0, self._show_epuskesmas_login_dialog)
+                self._login_event.wait()
+
+                # Navigate to pasien page
+                page.goto(EPUSKESMAS_PASIEN_URL)
+                try:
+                    page.locator('#form_search').wait_for(state="visible", timeout=10000)
+                except Exception:
+                    self._log("❌ Halaman pasien tidak valid atau belum login.")
+                    browser.close()
+                    return
+
+                self._log("🌸 Automation dimulai...")
+
+                counts = run_update_alamat(page, csv_path, submit_form=submit_form, log=self._log, stop_check=lambda: self._stop_flag)
+
+                # Update summary
+                self.counts["success"] = counts["success"]
+                self.counts["skipped"] = counts["skipped"] + counts["not_found"]
+                self.counts["error"] = counts["error"]
+                self.after(0, self._update_summary)
+
+                self._log("─" * 50)
+                self._log(f"🎀 Selesai! Updated: {counts['success']}, "
+                          f"Not Found: {counts['not_found']}, "
+                          f"Skipped: {counts['skipped']}, "
+                          f"Error: {counts['error']}")
+                self._save_log()
+
+                self._review_event = threading.Event()
+                self.after(0, self._show_review_dialog)
+                self._review_event.wait()
+
+                browser.close()
+
+        except Exception as e:
+            self._log(f"❌ Automation berhenti: {e}")
+        finally:
+            self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
+            self.after(0, lambda: self.stop_btn.configure(state="disabled"))
+
+    def _show_epuskesmas_login_dialog(self):
+        messagebox.showinfo("Login Required 📍",
+                            "Login ke ePuskesmas,\nlalu klik OK untuk mulai ✨")
+        self._login_event.set()
+
     def _show_login_dialog(self):
         messagebox.showinfo("Login Required 🌸",
                             "Login dulu dan atur tanggal,\nlalu klik OK untuk mulai ✨")
@@ -532,7 +620,8 @@ class App(ctk.CTk):
         log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
         os.makedirs(log_dir, exist_ok=True)
         automation_name = "kegiatan" if self.automation_var.get() == AUTOMATION_OPTIONS[0] else \
-                         "komdat" if self.automation_var.get() == AUTOMATION_OPTIONS[2] else "peserta"
+                         "komdat" if self.automation_var.get() == AUTOMATION_OPTIONS[2] else \
+                         "update_alamat" if self.automation_var.get() == AUTOMATION_OPTIONS[3] else "peserta"
         filename = f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}_{automation_name}.txt"
         log_content = self.log_box.get("1.0", "end").strip()
         with open(os.path.join(log_dir, filename), "w") as f:
@@ -567,10 +656,10 @@ class App(ctk.CTk):
                     print("\a")  # terminal bell
             except Exception:
                 pass
-            # Wait up to 60s for user to click checkbox and token to populate
-            turnstile_ready = _wait_turnstile(page, timeout=60000)
+            # Wait indefinitely for user to click checkbox (max 10 min)
+            turnstile_ready = _wait_turnstile(page, timeout=600000)
         if not turnstile_ready:
-            return "skipped", "Turnstile token belum siap (timeout 60s)"
+            return "skipped", "Turnstile token belum siap (timeout 10 menit)"
 
         # Ensure no overlay is blocking before interacting with form
         _dismiss_load_modals(page, after_reload=False)
@@ -628,6 +717,36 @@ class App(ctk.CTk):
                 if dismiss.is_visible():
                     dismiss.click()
                     page.wait_for_timeout(500)
+            elif "erifikasi keamanan gagal" in msg:
+                # Turnstile verification failed — dismiss and retry search
+                dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
+                if dismiss.is_visible():
+                    dismiss.click()
+                    page.wait_for_timeout(500)
+                self._log("  ⚠️ Verifikasi gagal, retry...")
+                page.locator("#txtnokartu").fill("")
+                page.wait_for_timeout(8000)
+                page.locator("#txtnokartu").fill(no_bpjs)
+                page.locator("#btnCariPeserta").click()
+                page.evaluate("""() => {
+                    const el = document.querySelector('[name="cf-turnstile-response"]');
+                    if (el) el.value = '';
+                }""")
+                try:
+                    page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning").first.wait_for(state="visible", timeout=15000)
+                    # Check if it failed again
+                    alert2 = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
+                    if alert2.is_visible():
+                        msg2 = alert2.inner_text().strip()
+                        dismiss2 = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
+                        if dismiss2.is_visible():
+                            dismiss2.click()
+                            page.wait_for_timeout(500)
+                        page.locator("#txtnokartu").fill("")
+                        return "skipped", msg2
+                except PlaywrightTimeoutError:
+                    page.locator("#txtnokartu").fill("")
+                    return "skipped", "tidak ada respons setelah retry verifikasi"
             else:
                 # Patient-specific alert — dismiss without reload
                 dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first

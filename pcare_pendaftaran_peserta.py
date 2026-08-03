@@ -56,9 +56,9 @@ def fill_peserta_row(page, row, index, submit_form, tanggal=None, log=None):
                 print("\a")
         except Exception:
             pass
-        turnstile_ready = _wait_turnstile(page, timeout=60000)
+        turnstile_ready = _wait_turnstile(page, timeout=600000)
     if not turnstile_ready:
-        return "skipped", "Turnstile token belum siap (timeout 60s)"
+        return "skipped", "Turnstile token belum siap (timeout 10 menit)"
 
     # Search patient
     page.locator("#txtnokartu").fill(no_bpjs)
@@ -126,6 +126,36 @@ def fill_peserta_row(page, row, index, submit_form, tanggal=None, log=None):
             if dismiss.is_visible():
                 dismiss.click()
                 page.wait_for_timeout(500)
+        elif "erifikasi keamanan gagal" in msg:
+            # Turnstile verification failed — dismiss and retry search
+            dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
+            if dismiss.is_visible():
+                dismiss.click()
+                page.wait_for_timeout(500)
+            _log("  ⚠️ Verifikasi gagal, retry...")
+            page.locator("#txtnokartu").fill("")
+            page.wait_for_timeout(8000)
+            page.locator("#txtnokartu").fill(no_bpjs)
+            page.locator("#btnCariPeserta").click()
+            page.evaluate("""() => {
+                const el = document.querySelector('[name="cf-turnstile-response"]');
+                if (el) el.value = '';
+            }""")
+            try:
+                page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning").first.wait_for(state="visible", timeout=15000)
+                # Check if it failed again
+                alert2 = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
+                if alert2.is_visible():
+                    msg2 = alert2.inner_text().strip()
+                    dismiss2 = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
+                    if dismiss2.is_visible():
+                        dismiss2.click()
+                        page.wait_for_timeout(500)
+                    page.locator("#txtnokartu").fill("")
+                    return "skipped", msg2
+            except PlaywrightTimeoutError:
+                page.locator("#txtnokartu").fill("")
+                return "skipped", "tidak ada respons setelah retry verifikasi"
         else:
             # Patient-specific alert — dismiss without reload
             dismiss = page.locator(".bootbox .btn, .bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
