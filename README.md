@@ -1,14 +1,15 @@
 # PCare Prolanis Automation
 
-Automation GUI untuk mengisi form di PCare eClaim BPJS dan Komdat Kemkes. Mendukung 3 jenis automation:
+Automation GUI untuk mengisi form di PCare eClaim BPJS, Komdat Kemkes, dan ePuskesmas. Mendukung 4 jenis automation:
 
 1. **Pendaftaran Kegiatan Prolanis** — mendaftarkan pasien ke kegiatan (Senam/Edukasi)
 2. **Pendaftaran Peserta Prolanis** — mendaftarkan pasien sebagai peserta Prolanis
 3. **Komdat Posyandu** — mengisi form kegiatan posyandu bulanan di microsite Kemkes
+4. **Update Alamat CSV** — mengambil alamat (kelurahan) dari ePuskesmas dan update file CSV
 
 ## Cara Pakai (GUI)
 
-### 1. Siapkan file CSV _(hanya untuk Prolanis)_
+### 1. Siapkan file CSV _(hanya untuk Prolanis & Update Alamat)_
 
 Taruh file CSV di folder `file/`.
 
@@ -42,6 +43,8 @@ NO_BPJS,TELEPON,ALAMAT
 
 **Komdat Posyandu** — tidak perlu CSV, data diambil langsung dari tabel di website.
 
+**Update Alamat CSV** — gunakan file CSV dengan format Pendaftaran Peserta (kolom ALAMAT akan di-update).
+
 ### 2. Jalankan GUI
 
 - **Mac**: `./run.sh`
@@ -53,7 +56,7 @@ NO_BPJS,TELEPON,ALAMAT
 - **Kegiatan** — pilih Senam (037) atau Edukasi (036) _(hanya untuk Pendaftaran Kegiatan)_
 - **Bulan** — pilih bulan target _(hanya untuk Komdat Posyandu)_
 - **Mode** — Test (isi form tanpa simpan) atau Submit (simpan data)
-- **Browse** — pilih file CSV _(hanya untuk Prolanis)_
+- **Browse** — pilih file CSV _(hanya untuk Prolanis & Update Alamat)_
 
 ### 4. Mulai
 
@@ -70,6 +73,7 @@ Setelah selesai, log otomatis disimpan di folder `logs/` dengan format:
 logs/2026-06-18_191852_peserta.txt
 logs/2026-06-18_143000_kegiatan.txt
 logs/2026-06-22_220000_komdat.txt
+logs/2026-08-03_170000_update_alamat.txt
 ```
 
 ## Setup
@@ -85,6 +89,9 @@ logs/2026-06-22_220000_komdat.txt
 - Pendaftaran Peserta: email konstan `upttamansari@gmail.com`, keterangan konstan `riwayat hipertensi`
 - Pendaftaran Peserta: telepon yang kosong/hanya nol/kurang dari 8 digit akan diganti `089526585949`
 - `respRate` dan `heartRate` diisi konstan (20 dan 80) untuk Pendaftaran Kegiatan
+- Turnstile token expired setiap ~5 pasien — otomatis retry klik Cari (8x, interval 8 detik)
+- Jika Cloudflare minta klik checkbox "Verify you are human" — notifikasi muncul, automation menunggu (max 10 menit)
+- "Verifikasi keamanan gagal" — otomatis retry 1x sebelum skip
 
 ## Catatan — Komdat Posyandu
 
@@ -103,3 +110,12 @@ logs/2026-06-22_220000_komdat.txt
 - Sumber Pembiayaan tidak diisi (dibiarkan kosong)
 - Mode Test: form diisi tapi modal ditutup tanpa simpan
 - Mode Submit: form diisi dan klik UPDATE untuk menyimpan
+
+## Catatan — Update Alamat CSV
+
+- URL: `https://bogor.epuskesmas.id/login`
+- Cari nomor BPJS di halaman Pasien ePuskesmas
+- Ambil **kelurahan** dari tabel hasil pencarian (kolom Kelurahan)
+- Jika pasien tidak ditemukan atau kelurahan kosong → alamat diisi random dari: SUKAMANTRI, TAMANSARI, PASIREURIH, SIRNAGALIH
+- Mode Test: cari dan tampilkan di log, file CSV tidak diubah
+- Mode Submit: cari dan update kolom ALAMAT di file CSV

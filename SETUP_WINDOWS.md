@@ -42,7 +42,7 @@ Akan muncul `(pcare-venv)` di awal baris.
 ## Step 5: Install Dependencies
 
 ```cmd
-pip install pandas playwright customtkinter
+pip install pandas playwright customtkinter playwright-stealth
 playwright install chromium
 ```
 
