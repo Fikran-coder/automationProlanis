@@ -49,6 +49,65 @@ KEGIATAN_OPTIONS = {"🏃 Senam (037)": "037", "📚 Edukasi (036)": "036"}
 AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis", "🏥 Komdat Posyandu"]
 
 
+def _dismiss_load_modals(page, after_reload=True):
+    """Dismiss warning banners and bootbox modals that appear on page load/reload.
+    Only dismisses SYSTEM modals (Belum Entri, HFIS), not patient-specific alerts.
+    Also handles rate-limit page by waiting for auto-reload.
+    
+    after_reload=True: called after page.goto — waits for modals to render.
+    after_reload=False: quick check for overlays blocking interaction.
+    """
+    # Handle rate-limit page ("Permintaan Terlalu Cepat")
+    if after_reload:
+        try:
+            if page.locator(".rate-card").is_visible(timeout=2000):
+                # Page will auto-reload after countdown (max 16s), wait for it
+                page.wait_for_selector("#txtnokartu", timeout=25000)
+                page.wait_for_timeout(2000)  # extra buffer for modals to appear after reload
+        except Exception:
+            pass
+        # Wait a moment for modals to render after page load
+        page.wait_for_timeout(2000)
+    # Dismiss yellow warning banner (Pakta Integritas HFIS)
+    # This overlay intercepts clicks on the form, so must be dismissed first
+    for _ in range(3):
+        try:
+            warning_close = page.locator('.WarningBoxKuningHitam [data-notify="dismiss"]')
+            if warning_close.is_visible(timeout=1000):
+                warning_close.click()
+                page.wait_for_timeout(500)
+            else:
+                break
+        except Exception:
+            break
+    # Dismiss bootbox modal ONLY if it's a system modal (Belum Entri Pelayanan)
+    try:
+        bootbox_body = page.locator(".bootbox-body")
+        if bootbox_body.is_visible(timeout=1000 if not after_reload else 2000):
+            text = bootbox_body.inner_text()
+            if "Belum Entri Pelayanan" in text:
+                page.locator(".bootbox-accept").click()
+                page.wait_for_timeout(500)
+    except Exception:
+        pass
+    # Check if warning banner appeared again after bootbox dismiss
+    try:
+        warning_close = page.locator('.WarningBoxKuningHitam [data-notify="dismiss"]')
+        if warning_close.is_visible(timeout=1000):
+            warning_close.click()
+            page.wait_for_timeout(300)
+    except Exception:
+        pass
+    # Clear any leftover text in search field (prevent stale data)
+    if after_reload:
+        try:
+            txt = page.locator("#txtnokartu")
+            if txt.is_visible(timeout=1000):
+                txt.fill("")
+        except Exception:
+            pass
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -316,8 +375,8 @@ class App(ctk.CTk):
                 self._log("🌸 Automation dimulai...")
 
                 # Save the date the user selected so we can restore after reload
-                if is_peserta:
-                    saved_date = page.locator("#txt_tglMulai").input_value()
+                date_selector = "#txt_tglMulai" if is_peserta else "#txttanggal"
+                saved_date = page.locator(date_selector).input_value()
 
                 for index, row in df.iterrows():
                     if self._stop_flag:
@@ -327,9 +386,9 @@ class App(ctk.CTk):
                     self._log(f"[{index + 1}/{len(df)}] {no_bpjs}")
                     try:
                         if is_peserta:
-                            result, msg = fill_peserta_row(page, row, index, submit_form, tanggal=saved_date)
+                            result, msg = fill_peserta_row(page, row, index, submit_form, tanggal=saved_date, log=self._log)
                         else:
-                            result, msg = self._fill_one_row(page, row, index, submit_form, kegiatan)
+                            result, msg = self._fill_one_row(page, row, index, submit_form, kegiatan, saved_date=saved_date)
                         self.counts[result] += 1
                         icons = {"success": "✅", "skipped": "⏭", "error": "❌", "test": "🔍"}
                         self._log(f"  {icons[result]} {result.upper()}{': ' + msg if msg else ''}")
@@ -339,26 +398,26 @@ class App(ctk.CTk):
                         self.after(0, self._update_summary)
                         try:
                             page.goto(form_url, wait_until="domcontentloaded")
+                            _dismiss_load_modals(page)
                             page.wait_for_timeout(3000)
                             page.locator("#txtnokartu").wait_for(state="visible", timeout=15000)
-                            if is_peserta and saved_date:
-                                page.evaluate("""(date) => {
-                                    const el = document.querySelector('#txt_tglMulai');
-                                    el.value = date;
-                                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                                }""", saved_date)
+                            if saved_date:
+                                page.evaluate("""(args) => {
+                                    const el = document.querySelector(args.sel);
+                                    if (el) { el.value = args.date; el.dispatchEvent(new Event('change', { bubbles: true })); }
+                                }""", {"sel": date_selector, "date": saved_date})
                         except Exception:
                             self._log("  ⚠️ Gagal reload halaman, coba sekali lagi...")
                             try:
                                 page.wait_for_timeout(5000)
                                 page.goto(form_url, wait_until="domcontentloaded")
+                                _dismiss_load_modals(page)
                                 page.locator("#txtnokartu").wait_for(state="visible", timeout=20000)
-                                if is_peserta and saved_date:
-                                    page.evaluate("""(date) => {
-                                        const el = document.querySelector('#txt_tglMulai');
-                                        el.value = date;
-                                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                                    }""", saved_date)
+                                if saved_date:
+                                    page.evaluate("""(args) => {
+                                        const el = document.querySelector(args.sel);
+                                        if (el) { el.value = args.date; el.dispatchEvent(new Event('change', { bubbles: true })); }
+                                    }""", {"sel": date_selector, "date": saved_date})
                             except Exception:
                                 self._log("  ⚠️ Browser tertutup, automation dihentikan.")
                                 break
@@ -480,7 +539,7 @@ class App(ctk.CTk):
             f.write(log_content)
         self._log(f"📁 Log disimpan: logs/{filename}")
 
-    def _fill_one_row(self, page, row, index, submit_form, kegiatan):
+    def _fill_one_row(self, page, row, index, submit_form, kegiatan, saved_date=None):
         no_bpjs = str(row["NO_BPJS"]).strip()
         tinggi_badan, berat_badan = split_value(row["TB_BB"])
         lingkar_perut = str(row["LP"]).strip()
@@ -488,37 +547,96 @@ class App(ctk.CTk):
 
         # Wait for Turnstile token (retry up to 3 times)
         from pcare_pendaftaran_peserta import _wait_turnstile
-        turnstile_ready = False
-        for attempt in range(3):
-            if _wait_turnstile(page):
-                turnstile_ready = True
-                break
-            page.wait_for_timeout(5000)
+        turnstile_ready = _wait_turnstile(page, timeout=10000)
         if not turnstile_ready:
-            return "skipped", "Turnstile token belum siap"
+            # Token not ready — notify user to click Turnstile checkbox
+            self._log("  ⚠️ Klik checkbox Turnstile di browser, menunggu...")
+            try:
+                import platform
+                if platform.system() == "Darwin":
+                    import subprocess
+                    subprocess.Popen(['osascript', '-e',
+                        'display notification "Klik checkbox Turnstile di browser!" with title "PCare Automation" sound name "Ping"'])
+                elif platform.system() == "Windows":
+                    from tkinter import messagebox as _mb
+                    # Show non-blocking messagebox in a thread so it doesn't freeze automation
+                    import threading
+                    threading.Thread(target=lambda: _mb.showwarning(
+                        "PCare Automation", "Klik checkbox Turnstile di browser!"), daemon=True).start()
+                else:
+                    print("\a")  # terminal bell
+            except Exception:
+                pass
+            # Wait up to 60s for user to click checkbox and token to populate
+            turnstile_ready = _wait_turnstile(page, timeout=60000)
+        if not turnstile_ready:
+            return "skipped", "Turnstile token belum siap (timeout 60s)"
+
+        # Ensure no overlay is blocking before interacting with form
+        _dismiss_load_modals(page, after_reload=False)
 
         page.locator("#txtnokartu").fill(no_bpjs)
         page.locator("#btnCariPeserta").click()
 
+        # Clear token value after search so next check waits for fresh token
+        page.evaluate("""() => {
+            const el = document.querySelector('[name="cf-turnstile-response"]');
+            if (el) el.value = '';
+        }""")
+
         try:
-            page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=20000)
+            page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning").first.wait_for(state="visible", timeout=20000)
         except PlaywrightTimeoutError:
-            page.locator("#txtnokartu").fill("")
-            return "skipped", "tidak ada respons (kemungkinan Turnstile expired)"
+            # No response — Turnstile token expired
+            # Auto-retry: click Cari every 8 seconds until response (max ~1 min)
+            self._log("  ⚠️ Token expired, retry klik Cari otomatis...")
+            got_response = False
+            for retry in range(8):
+                page.wait_for_timeout(8000)  # wait 8s for token to regenerate
+                # Make sure nomor is still in field
+                page.locator("#txtnokartu").fill(no_bpjs)
+                page.locator("#btnCariPeserta").click()
+                # Clear token after click for next iteration
+                page.evaluate("""() => {
+                    const el = document.querySelector('[name="cf-turnstile-response"]');
+                    if (el) el.value = '';
+                }""")
+                try:
+                    page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning").first.wait_for(state="visible", timeout=10000)
+                    got_response = True
+                    break
+                except PlaywrightTimeoutError:
+                    self._log(f"    retry {retry + 1}/8...")
+                    continue
+            if not got_response:
+                page.locator("#txtnokartu").fill("")
+                return "skipped", "tidak ada respons setelah 8 retry"
 
         # Small buffer to allow delayed modals (e.g. non-aktif) to appear after patient data loads
         page.wait_for_timeout(800)
 
+        # Dismiss system modals that may appear during/after search (not patient-specific)
+        _dismiss_load_modals(page, after_reload=False)
+
         alert = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
         if alert.is_visible():
             msg = alert.inner_text().strip()
-            dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
-            if dismiss.is_visible():
-                dismiss.click()
-                page.wait_for_timeout(500)
-            page.goto(FORM_URL, wait_until="domcontentloaded")
-            page.locator("#btnCariPeserta").wait_for(state="visible", timeout=10000)
-            return "skipped", msg
+            # Skip only for patient-specific alerts, not system modals
+            if "Belum Entri Pelayanan" in msg or "HFIS" in msg or "pakta integritas" in msg.lower():
+                # System modal — dismiss and continue
+                dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close, [data-notify='dismiss']").first
+                if dismiss.is_visible():
+                    dismiss.click()
+                    page.wait_for_timeout(500)
+            else:
+                # Patient-specific alert — dismiss without reload
+                dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
+                if dismiss.is_visible():
+                    dismiss.click()
+                    page.wait_for_timeout(500)
+                # Clear form for next patient (no reload needed)
+                page.locator("#txtnokartu").fill("")
+                return "skipped", msg
 
         page.locator('input[name="kunjSakitF"][value="false"]').check(force=True)
         page.locator('input[name="tkp"][value="10"]').check(force=True)
@@ -534,7 +652,13 @@ class App(ctk.CTk):
         if submit_form:
             page.wait_for_timeout(1000)
             if page.locator("#btnSimpanPendaftaran").is_disabled():
-                page.goto(FORM_URL, wait_until="domcontentloaded")
+                # Click Batal to reset form instead of reloading
+                try:
+                    page.locator("#Aktivitas").click()
+                    page.wait_for_timeout(500)
+                except Exception:
+                    pass
+                page.locator("#txtnokartu").fill("")
                 return "skipped", "button disabled"
             page.locator("#btnSimpanPendaftaran").click()
             try:

@@ -27,42 +27,74 @@ def _wait_turnstile(page, timeout=15000):
         return False
 
 
-def fill_peserta_row(page, row, index, submit_form, tanggal=None):
+def fill_peserta_row(page, row, index, submit_form, tanggal=None, log=None):
     no_bpjs = str(row["NO_BPJS"]).strip()
     telepon = str(row["TELEPON"]).strip()
     alamat = str(row["ALAMAT"]).strip()
 
-    # Wait for Turnstile token before searching (retry up to 3 times)
-    turnstile_ready = False
-    for attempt in range(3):
-        if _wait_turnstile(page):
-            turnstile_ready = True
-            break
-        page.wait_for_timeout(5000)  # wait 5s for token to refresh
+    def _log(msg):
+        if log:
+            log(msg)
+
+    # Wait for Turnstile token
+    turnstile_ready = _wait_turnstile(page, timeout=10000)
     if not turnstile_ready:
-        return "skipped", "Turnstile token belum siap"
+        # Token not ready — notify user to click Turnstile checkbox
+        _log("  ⚠️ Klik checkbox Turnstile di browser, menunggu...")
+        try:
+            import platform
+            if platform.system() == "Darwin":
+                import subprocess
+                subprocess.Popen(['osascript', '-e',
+                    'display notification "Klik checkbox Turnstile di browser!" with title "PCare Automation" sound name "Ping"'])
+            elif platform.system() == "Windows":
+                from tkinter import messagebox as _mb
+                import threading
+                threading.Thread(target=lambda: _mb.showwarning(
+                    "PCare Automation", "Klik checkbox Turnstile di browser!"), daemon=True).start()
+            else:
+                print("\a")
+        except Exception:
+            pass
+        turnstile_ready = _wait_turnstile(page, timeout=60000)
+    if not turnstile_ready:
+        return "skipped", "Turnstile token belum siap (timeout 60s)"
 
     # Search patient
     page.locator("#txtnokartu").fill(no_bpjs)
     page.locator("#btnCariPeserta").click()
 
-    # Wait for result — but handle silent failure (Turnstile rejection)
+    # Clear token after click so next check waits for fresh token
+    page.evaluate("""() => {
+        const el = document.querySelector('[name="cf-turnstile-response"]');
+        if (el) el.value = '';
+    }""")
+
+    # Wait for result
     try:
-        page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning, .bootbox-body").first.wait_for(state="visible", timeout=20000)
+        page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning").first.wait_for(state="visible", timeout=20000)
     except PlaywrightTimeoutError:
-        # Check if page redirected away
-        if "EntriPesertaProlanis" not in page.url:
-            page.goto(FORM_URL, wait_until="domcontentloaded")
-            page.locator("#txtnokartu").wait_for(state="visible", timeout=15000)
-            if tanggal:
-                page.evaluate("""(date) => {
-                    const el = document.querySelector('#txt_tglMulai');
-                    el.value = date;
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }""", tanggal)
-        else:
+        # No response — auto-retry klik Cari
+        _log("  ⚠️ Token expired, retry klik Cari otomatis...")
+        got_response = False
+        for retry in range(8):
+            page.wait_for_timeout(8000)
+            page.locator("#txtnokartu").fill(no_bpjs)
+            page.locator("#btnCariPeserta").click()
+            page.evaluate("""() => {
+                const el = document.querySelector('[name="cf-turnstile-response"]');
+                if (el) el.value = '';
+            }""")
+            try:
+                page.locator("#lblnmpst:not(:empty), .alert-danger, .alert-warning").first.wait_for(state="visible", timeout=10000)
+                got_response = True
+                break
+            except PlaywrightTimeoutError:
+                _log(f"    retry {retry + 1}/8...")
+                continue
+        if not got_response:
             page.locator("#txtnokartu").fill("")
-        return "skipped", "tidak ada respons (kemungkinan Turnstile expired)"
+            return "skipped", "tidak ada respons setelah 8 retry"
 
     page.wait_for_timeout(800)
 
@@ -73,34 +105,39 @@ def fill_peserta_row(page, row, index, submit_form, tanggal=None):
         if tanggal:
             page.evaluate("""(date) => {
                 const el = document.querySelector('#txt_tglMulai');
-                el.value = date;
-                el.dispatchEvent(new Event('change', { bubbles: true }));
+                if (el) { el.value = date; el.dispatchEvent(new Event('change', { bubbles: true })); }
             }""", tanggal)
         return "skipped", "halaman redirect, kembali ke form"
 
-    # Restore tanggal after search (form resets due to Cloudflare)
+    # Restore tanggal after search
     if tanggal:
-        # Use JS to set value directly and avoid datepicker popup
         page.evaluate("""(date) => {
             const el = document.querySelector('#txt_tglMulai');
-            el.value = date;
-            el.dispatchEvent(new Event('change', { bubbles: true }));
+            if (el) { el.value = date; el.dispatchEvent(new Event('change', { bubbles: true })); }
         }""", tanggal)
-        # # Dismiss datepicker if it appeared
-        # page.locator("body").click(position={"x": 0, "y": 0})
-        # page.wait_for_timeout(300)
 
-    # Check alerts
+    # Check alerts — dismiss system modals, skip only for patient-specific
     alert = page.locator(".alert-danger, .alert-warning, .bootbox-body").first
     if alert.is_visible():
         msg = alert.inner_text().strip()
-        dismiss = page.locator(".bootbox .btn, .bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
-        if dismiss.is_visible():
-            dismiss.click()
-        page.locator(".bootbox.modal").wait_for(state="hidden", timeout=5000)
-        page.wait_for_timeout(500)
-        page.locator("#txtnokartu").fill("")
-        return "skipped", msg
+        if "Belum Entri Pelayanan" in msg or "HFIS" in msg or "pakta integritas" in msg.lower():
+            # System modal — dismiss and continue
+            dismiss = page.locator(".bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close, [data-notify='dismiss']").first
+            if dismiss.is_visible():
+                dismiss.click()
+                page.wait_for_timeout(500)
+        else:
+            # Patient-specific alert — dismiss without reload
+            dismiss = page.locator(".bootbox .btn, .bootbox-cancel, .bootbox-accept, .bootbox .btn-primary, .alert .close").first
+            if dismiss.is_visible():
+                dismiss.click()
+            try:
+                page.locator(".bootbox.modal").wait_for(state="hidden", timeout=5000)
+            except Exception:
+                pass
+            page.wait_for_timeout(500)
+            page.locator("#txtnokartu").fill("")
+            return "skipped", msg
 
     # Check if already registered as Prolanis
     prb_lbl = page.locator("#prb_lbl")
