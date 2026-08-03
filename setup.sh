@@ -14,7 +14,7 @@ echo "[1/3] Membuat virtual environment..."
 python3 -m venv pcare-venv
 
 echo "[2/3] Install dependencies..."
-pcare-venv/bin/pip install pandas playwright customtkinter
+pcare-venv/bin/pip install pandas playwright customtkinter playwright-stealth
 
 echo "[3/3] Install browser Chromium..."
 pcare-venv/bin/playwright install chromium
