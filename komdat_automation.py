@@ -1,5 +1,7 @@
 """Komdat Posyandu automation — fills the monthly posyandu form on microsite kemkes."""
 
+import random
+
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 KOMDAT_LOGIN_URL = "https://microsite.kemkes.go.id/med_mci_si12/web/site/login"
@@ -38,7 +40,109 @@ def navigate_to_table(page: Page):
     page.wait_for_timeout(3000)
 
 
-def fill_posyandu_modal(page: Page, submit_form: bool):
+def generate_sasaran_data() -> dict:
+    """
+    Generate random values for the mandatory "Kelompok Sasaran" table.
+
+    Rules (sasaran = jumlah sasaran, kunjungan = jumlah kunjungan ke posyandu):
+    - Ibu Hamil:  sasaran = rand(8, 12);   kunjungan = sasaran - rand(0, 1)
+    - Bayi/Balita: sasaran = rand(31, 47); kunjungan = sasaran - rand(5, 7)
+    - Remaja:     sasaran = rand(9, 11);   kunjungan = sasaran - rand(1, 3)
+    - Dewasa (usia_produktif): sasaran = rand(21, 27); kunjungan = sasaran - rand(7, 10)
+    - Lansia:     sasaran = rand(26, 31);  kunjungan = sasaran - rand(7, 10)
+
+    All "dirujuk" (kunjungan dirujuk) fields are set to 0.
+
+    Returns a dict of field_id -> value (int) for the sasaran, kunjungan and
+    dirujuk inputs.
+    """
+    ibu_hamil_sasaran = random.randint(8, 12)
+    ibu_hamil = ibu_hamil_sasaran - random.randint(0, 1)
+
+    bayi_balita_sasaran = random.randint(31, 47)
+    bayi_balita = bayi_balita_sasaran - random.randint(5, 7)
+
+    remaja_sasaran = random.randint(9, 11)
+    remaja = remaja_sasaran - random.randint(1, 3)
+
+    usia_produktif_sasaran = random.randint(21, 27)
+    usia_produktif = usia_produktif_sasaran - random.randint(7, 10)
+
+    lansia_sasaran = random.randint(26, 31)
+    lansia = lansia_sasaran - random.randint(7, 10)
+
+    return {
+        "ibu_hamil_sasaran": ibu_hamil_sasaran,
+        "ibu_hamil": ibu_hamil,
+        "ibu_hamil_dirujuk": 0,
+        "bayi_balita_sasaran": bayi_balita_sasaran,
+        "bayi_balita": bayi_balita,
+        "bayi_balita_dirujuk": 0,
+        "remaja_sasaran": remaja_sasaran,
+        "remaja": remaja,
+        "remaja_dirujuk": 0,
+        "usia_produktif_sasaran": usia_produktif_sasaran,
+        "usia_produktif": usia_produktif,
+        "usia_produktif_dirujuk": 0,
+        "lansia_sasaran": lansia_sasaran,
+        "lansia": lansia,
+        "lansia_dirujuk": 0,
+    }
+
+
+def fill_kelompok_sasaran(page, container, log_fn=None) -> dict:
+    """
+    Fill the mandatory "Kelompok Sasaran" table with random-generated values.
+
+    The percentage columns are readonly and recalculated by the page's jQuery
+    `keyup` handlers, so after setting each value we dispatch input/keyup events
+    to trigger the auto-calculation.
+
+    `container` is a Playwright locator scoping the inputs (e.g. the modal), so
+    we don't accidentally match hidden inputs elsewhere on the page.
+    """
+    data = generate_sasaran_data()
+
+    # Order matters for the auto-percentage: fill sasaran (pembagi) before the
+    # kunjungan value, and the kunjungan value before its dirujuk value, so the
+    # keyup handlers compute correct percentages.
+    fill_order = [
+        "ibu_hamil_sasaran", "ibu_hamil", "ibu_hamil_dirujuk",
+        "bayi_balita_sasaran", "bayi_balita", "bayi_balita_dirujuk",
+        "remaja_sasaran", "remaja", "remaja_dirujuk",
+        "usia_produktif_sasaran", "usia_produktif", "usia_produktif_dirujuk",
+        "lansia_sasaran", "lansia", "lansia_dirujuk",
+    ]
+
+    for field_id in fill_order:
+        value = data[field_id]
+        field = container.locator(f"#{field_id}")
+        field.wait_for(state="visible", timeout=10000)
+        # Clear then type so the number input accepts the value and native
+        # events (input) fire; then explicitly dispatch keyup for the jQuery
+        # handlers bound with .keyup().
+        field.fill("")
+        field.fill(str(value))
+        field.dispatch_event("input")
+        field.dispatch_event("keyup")
+        if log_fn:
+            log_fn(f"    ✏️  {field_id} = {value}")
+        page.wait_for_timeout(150)
+
+    if log_fn:
+        log_fn(
+            "    📝 Sasaran (kunjungan/sasaran): "
+            f"Ibu Hamil {data['ibu_hamil']}/{data['ibu_hamil_sasaran']}, "
+            f"Bayi/Balita {data['bayi_balita']}/{data['bayi_balita_sasaran']}, "
+            f"Remaja {data['remaja']}/{data['remaja_sasaran']}, "
+            f"Dewasa {data['usia_produktif']}/{data['usia_produktif_sasaran']}, "
+            f"Lansia {data['lansia']}/{data['lansia_sasaran']}"
+        )
+
+    return data
+
+
+def fill_posyandu_modal(page: Page, submit_form: bool, log_fn=None):
     """Fill the modal form with the standard answers and click UPDATE if submit_form=True."""
     # Wait for modal content to load
     page.wait_for_timeout(2000)
@@ -88,13 +192,21 @@ def fill_posyandu_modal(page: Page, submit_form: bool):
     modal.locator("input[name='supervisi_posyandu'][value='Sudah']").click()
     page.wait_for_timeout(300)
 
+    # 8. Kelompok Sasaran (mandatory) — random-generated values.
+    # Scope to the modal if the inputs live there; otherwise fall back to page.
+    if modal.locator("#ibu_hamil_sasaran").count() > 0:
+        sasaran_container = modal
+    else:
+        sasaran_container = page
+    fill_kelompok_sasaran(page, sasaran_container, log_fn)
+
     if not submit_form:
         # Test mode: close modal without saving
         modal.locator(".close[data-dismiss='modal']").click()
         page.wait_for_timeout(1000)
         return
 
-    # 8. Click UPDATE button
+    # 9. Click UPDATE button
     modal.locator("#btn-simpan").click()
     page.wait_for_timeout(3000)
 
@@ -153,7 +265,7 @@ def run_komdat(page: Page, month_num: int, submit_form: bool, log_fn, stop_check
         page.wait_for_timeout(2000)
 
         try:
-            fill_posyandu_modal(page, submit_form)
+            fill_posyandu_modal(page, submit_form, log_fn)
             processed += 1
             log_fn(f"  [{i+1}] {posyandu_name} — ✅ done")
         except Exception as e:
