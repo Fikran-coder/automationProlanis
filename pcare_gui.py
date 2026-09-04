@@ -394,12 +394,46 @@ class App(ctk.CTk):
                 date_selector = "#txt_tglMulai" if is_peserta else "#txttanggal"
                 saved_date = page.locator(date_selector).input_value()
 
+                # Resume support (Senam/Edukasi only): read the "Riwayat Pendaftaran
+                # Peserta" table to find NO_KARTU already registered for this
+                # kegiatan + tanggal, so we can skip them and continue where a
+                # previous (interrupted) run left off.
+                registered_kartu = set()
+                if not is_peserta:
+                    try:
+                        registered_kartu = self._collect_registered_kartu(
+                            page, kegiatan, saved_date)
+                        self._log(
+                            f"🔎 Riwayat: {len(registered_kartu)} peserta sudah "
+                            f"terdaftar untuk kegiatan ini pada {saved_date}")
+                    except Exception as e:
+                        self._log(f"⚠️ Gagal baca tabel Riwayat (lanjut dari awal): {e}")
+                    finally:
+                        # Return to the entry form regardless of outcome
+                        try:
+                            page.goto(form_url, wait_until="domcontentloaded")
+                            _dismiss_load_modals(page)
+                            page.locator("#txtnokartu").wait_for(state="visible", timeout=15000)
+                            if saved_date:
+                                page.evaluate("""(args) => {
+                                    const el = document.querySelector(args.sel);
+                                    if (el) { el.value = args.date; el.dispatchEvent(new Event('change', { bubbles: true })); }
+                                }""", {"sel": date_selector, "date": saved_date})
+                        except Exception:
+                            pass
+
                 for index, row in df.iterrows():
                     if self._stop_flag:
                         self._log("🛑 Automation dihentikan oleh user.")
                         break
                     no_bpjs = str(row["NO_BPJS"]).strip()
                     self._log(f"[{index + 1}/{len(df)}] {no_bpjs}")
+                    # Skip patients already registered (resume from interruption)
+                    if not is_peserta and no_bpjs in registered_kartu:
+                        self.counts["skipped"] += 1
+                        self._log("  ⏭ SKIPPED: sudah terdaftar (riwayat)")
+                        self.after(0, self._update_summary)
+                        continue
                     try:
                         if is_peserta:
                             result, msg = fill_peserta_row(page, row, index, submit_form, tanggal=saved_date, log=self._log)
@@ -443,6 +477,27 @@ class App(ctk.CTk):
 
                 self._log("─" * 50)
                 self._log(f"🎀 Selesai! SUCCESS:{self.counts['success']} SKIPPED:{self.counts['skipped']} ERROR:{self.counts['error']} TEST:{self.counts['test']}")
+
+                # Final validation (Senam/Edukasi only): re-read the Riwayat table
+                # and compare the registered total against the CSV row count.
+                if not is_peserta and not self._stop_flag:
+                    try:
+                        final_kartu = self._collect_registered_kartu(page, kegiatan, saved_date)
+                        csv_kartu = {str(r["NO_BPJS"]).strip() for _, r in df.iterrows()}
+                        matched = csv_kartu & final_kartu
+                        missing = csv_kartu - final_kartu
+                        self._log("─" * 50)
+                        self._log(
+                            f"✅ Validasi: {len(matched)}/{len(csv_kartu)} data CSV "
+                            f"sudah terdaftar di Riwayat (tanggal {saved_date})")
+                        if missing:
+                            self._log(f"⚠️ {len(missing)} data BELUM terdaftar:")
+                            for k in sorted(missing):
+                                self._log(f"    • {k}")
+                        else:
+                            self._log("🎉 Semua data CSV sudah terdaftar. Total sesuai.")
+                    except Exception as e:
+                        self._log(f"⚠️ Gagal validasi total via Riwayat: {e}")
 
                 # Save log to file
                 self._save_log()
@@ -627,6 +682,80 @@ class App(ctk.CTk):
         with open(os.path.join(log_dir, filename), "w") as f:
             f.write(log_content)
         self._log(f"📁 Log disimpan: logs/{filename}")
+
+    def _collect_registered_kartu(self, page, kegiatan, saved_date):
+        """
+        Read the "Riwayat Pendaftaran Peserta" table and return the set of
+        NO_KARTU already registered for the given kegiatan (Senam/Edukasi) on
+        the given date.
+
+        Steps:
+        - Set #bulanRiwayat = saved_date and click #cariRiwayat (Refresh)
+        - Walk every pagination page of the #example DataTable
+        - Collect NO. KARTU (col 2) where POLI/KEGIATAN (col 6) matches the
+          selected kegiatan
+
+        Raises if the Riwayat table isn't present on the current page so the
+        caller can fall back to a full run.
+        """
+        # Map kode kegiatan -> text prefix shown in the POLI/KEGIATAN column
+        kegiatan_prefix = {"037": "senam", "036": "edukasi"}.get(kegiatan, "")
+
+        # Ensure the Riwayat controls exist on the current page
+        if page.locator("#bulanRiwayat").count() == 0 or page.locator("#example").count() == 0:
+            raise RuntimeError("tabel Riwayat tidak ditemukan di halaman aktif")
+
+        # Set the date filter to match the registration date, then Refresh
+        if saved_date:
+            page.evaluate("""(date) => {
+                const el = document.querySelector('#bulanRiwayat');
+                if (el) { el.value = date; el.dispatchEvent(new Event('change', { bubbles: true })); }
+            }""", saved_date)
+        page.locator("#cariRiwayat").click()
+        # Wait for the DataTable to finish processing
+        page.wait_for_timeout(1500)
+        try:
+            page.locator("#example_processing").wait_for(state="hidden", timeout=15000)
+        except Exception:
+            pass
+
+        registered = set()
+
+        def _scrape_current_page():
+            rows = page.locator("#example tbody tr")
+            n = rows.count()
+            for i in range(n):
+                row = rows.nth(i)
+                cells = row.locator("td")
+                if cells.count() < 7:
+                    continue
+                no_kartu = cells.nth(1).inner_text().strip()
+                poli = cells.nth(5).inner_text().strip().lower()
+                if not no_kartu:
+                    continue
+                # Match kegiatan by prefix; if unknown kode, accept all
+                if kegiatan_prefix and not poli.startswith(kegiatan_prefix):
+                    continue
+                registered.add(no_kartu)
+
+        # Walk all pages via the Next button until it's disabled
+        max_pages = 200  # safety cap
+        for _ in range(max_pages):
+            _scrape_current_page()
+            next_btn = page.locator("#example_next")
+            if next_btn.count() == 0:
+                break
+            cls = next_btn.first.get_attribute("class") or ""
+            if "disabled" in cls:
+                break
+            next_btn.locator("a").first.click()
+            page.wait_for_timeout(800)
+            try:
+                page.locator("#example_processing").wait_for(state="hidden", timeout=10000)
+            except Exception:
+                pass
+
+        return registered
 
     def _fill_one_row(self, page, row, index, submit_form, kegiatan, saved_date=None):
         no_bpjs = str(row["NO_BPJS"]).strip()
