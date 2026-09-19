@@ -370,7 +370,6 @@ class App(ctk.CTk):
             with Stealth().use_sync(sync_playwright()) as p:
                 browser = p.chromium.launch_persistent_context(
                     user_data_dir="browser_session", headless=False,
-                    channel="chrome",
                     args=["--disable-blink-features=AutomationControlled"])
                 page = browser.pages[0]
                 page.goto(form_url)
@@ -532,7 +531,6 @@ class App(ctk.CTk):
             with Stealth().use_sync(sync_playwright()) as p:
                 browser = p.chromium.launch_persistent_context(
                     user_data_dir="browser_session_komdat", headless=False,
-                    channel="chrome",
                     args=["--disable-blink-features=AutomationControlled"])
                 page = browser.pages[0]
                 page.goto(KOMDAT_LOGIN_URL)
@@ -604,7 +602,6 @@ class App(ctk.CTk):
             with Stealth().use_sync(sync_playwright()) as p:
                 browser = p.chromium.launch_persistent_context(
                     user_data_dir="browser_session_epuskesmas", headless=False,
-                    channel="chrome",
                     args=["--disable-blink-features=AutomationControlled"])
                 page = browser.pages[0]
                 page.goto(EPUSKESMAS_LOGIN_URL)
