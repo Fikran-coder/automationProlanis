@@ -52,6 +52,26 @@ FONT_BOLD  = ("Helvetica", 13, "bold")
 
 KEGIATAN_OPTIONS = {"🏃 Senam (037)": "037", "📚 Edukasi (036)": "036"}
 AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis", "🏥 Komdat Posyandu", "📍 Update Alamat CSV"]
+RIWAYAT_PAGE_DELAY_MS = 1500
+
+
+def registered_kartu_from_riwayat_rows(rows, kegiatan):
+    """Extract card numbers for the selected activity from visible table rows."""
+    kegiatan_prefix = {"037": "senam", "036": "edukasi"}.get(kegiatan, "")
+    registered = set()
+
+    for cells in rows:
+        if not isinstance(cells, (list, tuple)) or len(cells) < 6:
+            continue
+        no_kartu = str(cells[1]).strip()
+        poli = str(cells[5]).strip().lower()
+        if not no_kartu:
+            continue
+        if kegiatan_prefix and not poli.startswith(kegiatan_prefix):
+            continue
+        registered.add(no_kartu)
+
+    return registered
 
 
 def _dismiss_load_modals(page, after_reload=True):
@@ -393,22 +413,25 @@ class App(ctk.CTk):
                 date_selector = "#txt_tglMulai" if is_peserta else "#txttanggal"
                 saved_date = page.locator(date_selector).input_value()
 
-                # Resume support (Senam/Edukasi only): read the "Riwayat Pendaftaran
-                # Peserta" table to find NO_KARTU already registered for this
-                # kegiatan + tanggal, so we can skip them and continue where a
-                # previous (interrupted) run left off.
+                # Resume support for Senam/Edukasi. Riwayat is scanned from the
+                # last page backwards because newly registered entries are
+                # normally at the end of the table.
+                csv_kartu = {
+                    str(r["NO_BPJS"]).strip()
+                    for _, r in df.iterrows()
+                    if str(r["NO_BPJS"]).strip()
+                }
                 registered_kartu = set()
                 if not is_peserta:
                     try:
                         registered_kartu = self._collect_registered_kartu(
-                            page, kegiatan, saved_date)
+                            page, kegiatan, saved_date, target_kartu=csv_kartu)
                         self._log(
                             f"🔎 Riwayat: {len(registered_kartu)} peserta sudah "
                             f"terdaftar untuk kegiatan ini pada {saved_date}")
                     except Exception as e:
                         self._log(f"⚠️ Gagal baca tabel Riwayat (lanjut dari awal): {e}")
                     finally:
-                        # Return to the entry form regardless of outcome
                         try:
                             page.goto(form_url, wait_until="domcontentloaded")
                             _dismiss_load_modals(page)
@@ -427,7 +450,6 @@ class App(ctk.CTk):
                         break
                     no_bpjs = str(row["NO_BPJS"]).strip()
                     self._log(f"[{index + 1}/{len(df)}] {no_bpjs}")
-                    # Skip patients already registered (resume from interruption)
                     if not is_peserta and no_bpjs in registered_kartu:
                         self.counts["skipped"] += 1
                         self._log("  ⏭ SKIPPED: sudah terdaftar (riwayat)")
@@ -477,12 +499,10 @@ class App(ctk.CTk):
                 self._log("─" * 50)
                 self._log(f"🎀 Selesai! SUCCESS:{self.counts['success']} SKIPPED:{self.counts['skipped']} ERROR:{self.counts['error']} TEST:{self.counts['test']}")
 
-                # Final validation (Senam/Edukasi only): re-read the Riwayat table
-                # and compare the registered total against the CSV row count.
                 if not is_peserta and not self._stop_flag:
                     try:
-                        final_kartu = self._collect_registered_kartu(page, kegiatan, saved_date)
-                        csv_kartu = {str(r["NO_BPJS"]).strip() for _, r in df.iterrows()}
+                        final_kartu = self._collect_registered_kartu(
+                            page, kegiatan, saved_date, target_kartu=csv_kartu)
                         matched = csv_kartu & final_kartu
                         missing = csv_kartu - final_kartu
                         self._log("─" * 50)
@@ -491,8 +511,8 @@ class App(ctk.CTk):
                             f"sudah terdaftar di Riwayat (tanggal {saved_date})")
                         if missing:
                             self._log(f"⚠️ {len(missing)} data BELUM terdaftar:")
-                            for k in sorted(missing):
-                                self._log(f"    • {k}")
+                            for kartu in sorted(missing):
+                                self._log(f"    • {kartu}")
                         else:
                             self._log("🎉 Semua data CSV sudah terdaftar. Total sesuai.")
                     except Exception as e:
@@ -680,75 +700,72 @@ class App(ctk.CTk):
             f.write(log_content)
         self._log(f"📁 Log disimpan: logs/{filename}")
 
-    def _collect_registered_kartu(self, page, kegiatan, saved_date):
-        """
-        Read the "Riwayat Pendaftaran Peserta" table and return the set of
-        NO_KARTU already registered for the given kegiatan (Senam/Edukasi) on
-        the given date.
-
-        Steps:
-        - Set #bulanRiwayat = saved_date and click #cariRiwayat (Refresh)
-        - Walk every pagination page of the #example DataTable
-        - Collect NO. KARTU (col 2) where POLI/KEGIATAN (col 6) matches the
-          selected kegiatan
-
-        Raises if the Riwayat table isn't present on the current page so the
-        caller can fall back to a full run.
-        """
-        # Map kode kegiatan -> text prefix shown in the POLI/KEGIATAN column
-        kegiatan_prefix = {"037": "senam", "036": "edukasi"}.get(kegiatan, "")
-
-        # Ensure the Riwayat controls exist on the current page
+    def _collect_registered_kartu(self, page, kegiatan, saved_date, target_kartu=None):
+        """Scan Riwayat from the last page to the first with a safe click delay."""
         if page.locator("#bulanRiwayat").count() == 0 or page.locator("#example").count() == 0:
             raise RuntimeError("tabel Riwayat tidak ditemukan di halaman aktif")
 
-        # Set the date filter to match the registration date, then Refresh
         if saved_date:
             page.evaluate("""(date) => {
                 const el = document.querySelector('#bulanRiwayat');
                 if (el) { el.value = date; el.dispatchEvent(new Event('change', { bubbles: true })); }
             }""", saved_date)
         page.locator("#cariRiwayat").click()
-        # Wait for the DataTable to finish processing
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(RIWAYAT_PAGE_DELAY_MS)
         try:
             page.locator("#example_processing").wait_for(state="hidden", timeout=15000)
         except Exception:
             pass
 
+        # On page 1, DataTables exposes the final page as the last numeric link
+        # (for example: 1 2 3 4 5 … 20). Jump there once, then walk backwards.
+        numeric_links = page.locator(
+            "#example_paginate li.paginate_button:not(.previous):not(.next):not(.disabled) a"
+        )
+        if numeric_links.count() > 0:
+            last_link = numeric_links.last
+            parent_class = last_link.evaluate("el => el.parentElement.className") or ""
+            if "active" not in parent_class:
+                last_link.click()
+                page.wait_for_timeout(RIWAYAT_PAGE_DELAY_MS)
+                try:
+                    page.locator("#example_processing").wait_for(
+                        state="hidden", timeout=15000)
+                except Exception:
+                    pass
+
         registered = set()
+        target_kartu = set(target_kartu or [])
 
-        def _scrape_current_page():
+        for _ in range(200):
             rows = page.locator("#example tbody tr")
-            n = rows.count()
-            for i in range(n):
-                row = rows.nth(i)
-                cells = row.locator("td")
-                if cells.count() < 7:
-                    continue
-                no_kartu = cells.nth(1).inner_text().strip()
-                poli = cells.nth(5).inner_text().strip().lower()
-                if not no_kartu:
-                    continue
-                # Match kegiatan by prefix; if unknown kode, accept all
-                if kegiatan_prefix and not poli.startswith(kegiatan_prefix):
-                    continue
-                registered.add(no_kartu)
+            visible_rows = []
+            for index in range(rows.count()):
+                cells = rows.nth(index).locator("td")
+                visible_rows.append([
+                    cells.nth(cell_index).inner_text().strip()
+                    for cell_index in range(cells.count())
+                ])
+            registered.update(
+                registered_kartu_from_riwayat_rows(visible_rows, kegiatan)
+            )
 
-        # Walk all pages via the Next button until it's disabled
-        max_pages = 200  # safety cap
-        for _ in range(max_pages):
-            _scrape_current_page()
-            next_btn = page.locator("#example_next")
-            if next_btn.count() == 0:
+            # Stop early when every number from the CSV has been found.
+            if target_kartu and target_kartu.issubset(registered):
                 break
-            cls = next_btn.first.get_attribute("class") or ""
-            if "disabled" in cls:
+
+            previous = page.locator("#example_previous")
+            if previous.count() == 0:
                 break
-            next_btn.locator("a").first.click()
-            page.wait_for_timeout(800)
+            previous_class = previous.first.get_attribute("class") or ""
+            if "disabled" in previous_class:
+                break
+
+            previous.locator("a").first.click()
+            page.wait_for_timeout(RIWAYAT_PAGE_DELAY_MS)
             try:
-                page.locator("#example_processing").wait_for(state="hidden", timeout=10000)
+                page.locator("#example_processing").wait_for(
+                    state="hidden", timeout=15000)
             except Exception:
                 pass
 
