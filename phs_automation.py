@@ -15,6 +15,12 @@ def _clean(val):
     return s
 
 
+def _clean_or_dash(val):
+    """Clean val, return '-' if empty."""
+    c = _clean(val)
+    return c if c else "-"
+
+
 
 def find_question_item(page, title_pattern):
     """Find the listitem container of a Google Form question by heading text."""
