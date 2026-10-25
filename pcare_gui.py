@@ -51,7 +51,7 @@ FONT_SMALL = ("Helvetica", 11)
 FONT_BOLD  = ("Helvetica", 13, "bold")
 
 KEGIATAN_OPTIONS = {"🏃 Senam (037)": "037", "📚 Edukasi (036)": "036"}
-AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis", "🏥 Komdat Posyandu", "📍 Update Alamat CSV"]
+AUTOMATION_OPTIONS = ["📋 Pendaftaran Kegiatan Prolanis", "👥 Pendaftaran Peserta Prolanis", "🏥 Komdat Posyandu", "📍 Update Alamat CSV", "📝 Survei PHS 2026"]
 RIWAYAT_PAGE_DELAY_MS = 1500
 
 
@@ -357,6 +357,7 @@ class App(ctk.CTk):
     def _run_automation(self):
         is_komdat = self.automation_var.get() == AUTOMATION_OPTIONS[2]
         is_update_alamat = self.automation_var.get() == AUTOMATION_OPTIONS[3]
+        is_phs = self.automation_var.get() == AUTOMATION_OPTIONS[4]
 
         if is_komdat:
             self._run_komdat_automation()
@@ -364,6 +365,10 @@ class App(ctk.CTk):
 
         if is_update_alamat:
             self._run_update_alamat_automation()
+            return
+
+        if is_phs:
+            self._run_phs_automation()
             return
 
         csv_path    = self.csv_path.get()
@@ -668,6 +673,82 @@ class App(ctk.CTk):
             self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
             self.after(0, lambda: self.stop_btn.configure(state="disabled"))
 
+    def _run_phs_automation(self):
+        import os
+        from phs_automation import PHS_FORM_URL, run_phs_batch
+
+        csv_path = self.csv_path.get()
+        submit_form = self.mode_var.get() == "submit"
+
+        if not csv_path or not os.path.isfile(csv_path):
+            self._log("❌ File CSV tidak valid")
+            self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
+            return
+
+        self._log("📝 Survei PHS 2026")
+        self._log(f"File: {os.path.basename(csv_path)}")
+        self._log(f"Mode: {'SUBMIT 🚀 (kirim form)' if submit_form else 'TEST 🔍 (tidak submit)'}")
+        self._log("─" * 50)
+
+        try:
+            with Stealth().use_sync(sync_playwright()) as p:
+                browser = p.chromium.launch_persistent_context(
+                    user_data_dir="browser_session_phs",
+                    headless=False,
+                    args=["--disable-blink-features=AutomationControlled"]
+                )
+                page = browser.pages[0] if browser.pages else browser.new_page()
+                page.goto(PHS_FORM_URL)
+
+                self._login_event = threading.Event()
+                self.after(0, self._show_phs_account_dialog)
+                self._login_event.wait()
+
+                self._log("🌸 Mulai pengisian form PHS...")
+
+                counts = run_phs_batch(
+                    page,
+                    csv_path,
+                    submit_form=submit_form,
+                    log=self._log,
+                    stop_check=lambda: self._stop_flag
+                )
+
+                self.counts["success"] = counts["success"]
+                self.counts["test"] = counts["test"]
+                self.counts["error"] = counts["error"]
+                self.counts["skipped"] = counts["skipped"]
+                self.after(0, self._update_summary)
+
+                self._log("─" * 50)
+                self._log(
+                    f"🎀 Selesai! Success: {counts['success']}, "
+                    f"Test: {counts['test']}, "
+                    f"Skipped: {counts['skipped']}, "
+                    f"Error: {counts['error']}"
+                )
+                self._save_log()
+
+                self._review_event = threading.Event()
+                self.after(0, self._show_review_dialog)
+                self._review_event.wait()
+
+                browser.close()
+
+        except Exception as e:
+            self._log(f"❌ Automation berhenti: {e}")
+            self._save_log()
+        finally:
+            self.after(0, lambda: self.start_btn.configure(state="normal", text="▶  Mulai Automation"))
+            self.after(0, lambda: self.stop_btn.configure(state="disabled"))
+
+    def _show_phs_account_dialog(self):
+        messagebox.showinfo(
+            "Survei PHS 2026 📝",
+            "Silakan periksa akun Google / switch account jika perlu.\nKlik OK untuk mulai pengisian otomatis ✨"
+        )
+        self._login_event.set()
+
     def _show_epuskesmas_login_dialog(self):
         messagebox.showinfo("Login Required 📍",
                             "Login ke ePuskesmas,\nlalu klik OK untuk mulai ✨")
@@ -693,7 +774,8 @@ class App(ctk.CTk):
         os.makedirs(log_dir, exist_ok=True)
         automation_name = "kegiatan" if self.automation_var.get() == AUTOMATION_OPTIONS[0] else \
                          "komdat" if self.automation_var.get() == AUTOMATION_OPTIONS[2] else \
-                         "update_alamat" if self.automation_var.get() == AUTOMATION_OPTIONS[3] else "peserta"
+                         "update_alamat" if self.automation_var.get() == AUTOMATION_OPTIONS[3] else \
+                         "phs" if self.automation_var.get() == AUTOMATION_OPTIONS[4] else "peserta"
         filename = f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}_{automation_name}.txt"
         log_content = self.log_box.get("1.0", "end").strip()
         with open(os.path.join(log_dir, filename), "w") as f:

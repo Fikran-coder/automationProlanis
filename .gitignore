@@ -1,6 +1,7 @@
 browser_session/
 browser_session_komdat/
 browser_session_epuskesmas/
+browser_session_phs/
 pcare-venv/
 __pycache__/
 *.pyc
